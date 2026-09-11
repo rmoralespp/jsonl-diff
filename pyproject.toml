@@ -1,0 +1,190 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jsonl-diff"
+version = "0.1.0"
+description = "Strict, disk-backed reconciliation of large JSONL/NDJSON datasets for Python."
+readme = "README.md"
+license = { file = "LICENSE" }
+keywords = ["jsonlines", "ndjson", "jsonl", "json", "gzip", "bzip2", "xz", "zst", "utilities", "serialization", "deserialization", "diff", "json-diff", "cli"]
+authors = [{ name = "rmoralespp", email = "rmoralespp@gmail.com" }]
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet",
+    "Topic :: Utilities",
+    "Topic :: File Formats :: JSON",
+]
+dependencies = [
+    "py-jsonl==1.5.2",
+]
+
+[project.scripts]
+jsonl-diff = "jsonl_diff:main"
+
+[tool.setuptools]
+py-modules = ["jsonl_diff"]
+
+[dependency-groups]
+doc = [
+    "zensical"
+]
+test = [
+    "pytest",
+    "coverage",
+    "pytest-cov",
+    "setuptools; python_version >= '3.12'",
+]
+lint = [
+    "ruff",
+    "pymport"
+]
+
+[project.urls]
+Source = "https://github.com/rmoralespp/jsonl-diff"
+Homepage = "https://github.com/rmoralespp/jsonl-diff"
+Changelog = "https://github.com/rmoralespp/jsonl-diff/blob/main/CHANGELOG.md"
+Issues = "https://github.com/rmoralespp/jsonl-diff/issues"
+Documentation = "https://rmoralespp.github.io/jsonl-diff/"
+
+[tool.coverage.run]
+branch = true
+omit = ["tests/*"]
+
+[tool.coverage.report]
+skip_empty = true
+skip_covered = true
+show_missing = true
+exclude_also = [
+  "if __name__ == .__main__.",
+]
+
+[tool.black]
+line-length = 120
+skip-string-normalization = true
+
+[tool.ruff]
+line-length = 120
+preview = true
+
+[tool.ruff.lint]
+select = [
+    # pyflakes
+    "F",
+
+    # pycodestyle
+    "E",
+    "W",
+
+    # isort
+    "I",
+
+    # pydocstyle
+    "D200", # One-line docstring should fit on one line
+    "D201", # No blank lines allowed before function docstring
+    "D204", # 1 blank line required after class docstring
+    "D206", # Docstring should be indented with spaces, not tabs
+    "D207", # Docstring is under-indented
+    "D208", # Docstring is over-indented
+    "D209", # Multi-line docstring closing quotes should be on a separate line
+    "D210", # No whitespaces allowed surrounding docstring text
+    "D211", # No blank lines allowed before class docstring
+    "D213", # Multi-line docstring summary should start at the second line
+    "D300", # Use """triple double quotes"""
+    "D301", # Use r""" if any backslashes in a docstring
+    "D402", # First line should not be the function's signature
+    "D403", # First word of the first line should be properly capitalized
+    "D404", # First word of the docstring should not be "This"
+    "D419", # Docstring is empty
+
+    # pyupgrade
+    "UP003", # Use str instead of type(...)
+    "UP005", # assertEquals is deprecated, use assertEqual
+    "UP008", # Use super() instead of super(__class__, self)
+    "UP011", # Unnecessary parentheses to functools.lru_cache
+    "UP015", # Unnecessary open mode parameters
+    "UP017", # Use datetime.UTC alias
+    "UP018", # Unnecessary call to `str` and `bytes`
+    "UP020", # Use builtin `open` instead
+    "UP021", # universal_newlines is deprecated, use text
+    "UP022", # Sending stdout and stderr to pipe is deprecated, use capture_output
+    "UP034", # Avoid extraneous parentheses
+
+    # flake8-2020
+    "YTT",
+
+    # flake8-bugbear
+    "B",
+
+    # flake8-builtins
+    "A",
+
+    # flake8-comprehensions
+    "C4",
+
+    # flake8-debugger
+    "T10",
+
+    # flake8-import-conventions
+    "ICN",
+
+    # flake8-pytest-style
+    "PT",
+
+    # flake8-simplify
+    "SIM",
+
+    # Pylint
+    "PLC",
+    "PLE",
+    "PLW",
+
+    # flake8-commas
+    "COM812", # Trailing comma missing
+
+    # Ruff-specific rules
+    "RUF024", # Do not pass mutable objects as values to dict.fromkeys
+    "RUF026", # default_factory is a positional-only argument to defaultdict
+    "RUF100", # Unused noqa directive
+]
+
+ignore = [
+    # Disabled by default. :)
+    # https://github.com/gforcada/flake8-builtins/pull/76
+    "A003", # Class attribute `...` is shadowing a python builtin
+    "A005", # Module "xxx" is shadowing a Python buildint module
+
+    "B905", # `zip()` without an explicit `strict=` parameter
+
+    "C400", # Unnecessary `tuple` call (rewrite as a literal)
+    "C401", # Unnecessary generator (rewrite as a set comprehension)
+    "C408", # Unnecessary `dict` call (rewrite as a literal)
+
+    "ICN001",  # 'xml.etree.ElementTree should be imported as 'ET'
+
+    "PLC0207", # Accessing only the first or last element of `str.split()` without setting `maxsplit=1`
+    "PLC0415", # `import` should be at the top-level of a file
+    "PLW0120", # Else clause on loop without a break statement.
+
+    "SIM102", # Use a single `if` statement instead of nested `if` statements
+    "SIM108", # Use ternary operator ... instead of if-else-block
+    "SIM117", # (Python 3.10) Use a single with statement with multiple contexts instead of nested with statements
+
+    "PT006", # Wrong name(s) type in `@pytest.mark.parametrize`, expected `tuple`
+    "PT007", # Wrong values type in `@pytest.mark.parametrize` expected `list` of `tuple`
+    "PT011", # `pytest.raises(ValueError)` is too broad, set the `match` parameter or use a more specific exception
+    "PT019", # Fixture `_` without value is injected as parameter, use `@pytest.mark.usefixtures` instead
+]
