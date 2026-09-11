@@ -1,5 +1,15 @@
 # jsonl-diff
 
+----
+
+<p>
+  <img src="https://img.shields.io/pypi/v/jsonl-diff.svg" alt="PyPI">
+  <img src="https://img.shields.io/pypi/pyversions/jsonl-diff.svg" alt="Python">
+  <img src="https://github.com/rmoralespp/jsonl-diff/workflows/CI/badge.svg" alt="CI">
+  <img src="https://codecov.io/gh/rmoralespp/jsonl-diff/branch/main/graph/badge.svg" alt="Coverage">
+  <img src="https://img.shields.io/github/license/rmoralespp/jsonl-diff.svg" alt="License">
+</p>
+
 `jsonl-diff` performs strict, identity-based reconciliation of JSONL/NDJSON
 datasets. It matches records by one or more top-level fields, then classifies
 each identity as `equal`, `added`, `deleted`, or `modified`.
@@ -42,8 +52,7 @@ temporary disk.
 
 ## Requirements and installation
 
-`jsonl-diff` supports Python 3.8 through 3.14. It depends on
-`py-jsonl==1.5.2`.
+`jsonl-diff` supports Python 3.8 through 3.14.
 
 Install it in a project managed by `uv`:
 
