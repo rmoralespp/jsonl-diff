@@ -20,8 +20,7 @@ A text diff compares lines. That is usually the wrong model for datasets:
 reordering unchanged records creates noise, and inserting one record can make
 every later line appear different.
 
-`jsonl-diff` fills the gap between line-oriented tools and in-memory dataframe
-comparisons:
+`jsonl-diff` fills the gap between line-oriented tools and in-memory dataframe comparisons:
 
 - match records by identity, not physical position;
 - compare datasets larger than available RAM using temporary SQLite storage;
