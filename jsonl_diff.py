@@ -18,7 +18,7 @@ from typing import Any, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Uni
 import jsonl
 
 Scalar = Union[str, Decimal, int, float, bool]
-IdentityKey = Tuple[Union[str, Decimal, bool], ...]
+IdentityKey = Tuple[Union[str, Decimal, bool, None], ...]
 
 _MISSING = object()
 
@@ -268,12 +268,20 @@ def _remove_ignored(value: Any, tree: Dict[str, Any]) -> Any:
 
 
 def _identity(record: Dict[str, Any], keys: Sequence[str]) -> IdentityKey:
+    composite = len(keys) > 1
     values = []
     for name in keys:
         if name not in record:
             raise ValueError("missing identity field {!r}".format(name))
         value = record[name]
-        if value is None or not isinstance(value, (str, Decimal, int, float, bool)):
+        if value is None:
+            # A null component is only tolerated within a composite (multi-field)
+            # identity, where the other components still keep the key selective.
+            # A single-field identity may not be null, since it would collapse
+            # every null record into one indistinguishable identity.
+            if not composite:
+                raise ValueError("identity field {!r} must be a non-null scalar".format(name))
+        elif not isinstance(value, (str, Decimal, int, float, bool)):
             raise ValueError("identity field {!r} must be a non-null scalar".format(name))
         values.append(value)
     return tuple(values)

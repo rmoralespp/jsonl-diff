@@ -370,8 +370,13 @@ input and duplicate validation.
 ### Identity and duplicates
 
 Identity fields are top-level object-member names. Each component must exist
-and be a non-null string, number, or boolean; objects and arrays are invalid.
-Nested identity paths and automatic key detection are not supported.
+and be a string, number, boolean, or (composite identities only) `null`;
+objects and arrays are invalid. A single-field identity may not be `null`,
+since that would collapse every `null` record into one indistinguishable
+identity; a `null` value is only tolerated as one component of a composite
+(multi-field) identity, where the other components still keep the key
+selective. Nested identity paths and automatic key detection are not
+supported.
 
 Composite identity field names are sorted lexically before their values are
 extracted. Consequently, `key=("b", "a")` and `key=("a", "b")` both produce

@@ -308,6 +308,37 @@ class TestInputValidation:
             with diff(old, new, key="id"):
                 pass
 
+    def test_null_component_is_accepted_in_composite_identity(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"a": 1, "b": None, "value": "old"}])
+        new = write_jsonl("new.jsonl", [{"a": 1, "b": None, "value": "new"}])
+
+        # Act
+        with diff(old, new, key=("a", "b")) as result:
+            change = next(result.changes())
+
+        # Assert
+        assert change.key == (Decimal("1"), None)
+        assert change.operation == ChangeOperation.MODIFIED
+
+    def test_null_component_still_distinguishes_composite_identities(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"a": 1, "b": None, "value": "one"}, {"a": 2, "b": None, "value": "two"}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"a": 1, "b": None, "value": "one"}, {"a": 2, "b": None, "value": "changed"}],
+        )
+
+        # Act
+        with diff(old, new, key=("a", "b")) as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(added=0, deleted=0, equal=1, modified=1)
+
     def test_duplicate_identity_reports_source_and_physical_lines(self, write_jsonl):
         # Arrange
         old = write_jsonl("old.jsonl", [{"id": 1}, {"id": 2}, {"id": 1}])
