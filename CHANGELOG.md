@@ -2,9 +2,13 @@
 
 ## Unreleased
 
+## v0.1.1
+
 - **Added:** `--where` to filter which records participate in the comparison using a JMESPath expression.
 - **Changed:** The tmp SQLite index no longer stores the full canonical content BLOB.
 - **Changed:** A `null` value is now accepted for a component of a composite (multi-field) `--key`.
+- **Changed:** README synthesized into a quick-start-focused overview; detailed reference material moved to `docs/`.
+
 
 ## v0.1.0
 
