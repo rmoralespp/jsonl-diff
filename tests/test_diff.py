@@ -283,7 +283,7 @@ class TestWhereFiltering:
         )
 
         # Act
-        with diff(old, new, key="id", where="country == `ES`") as result:
+        with diff(old, new, key="id", where='country == `"ES"`') as result:
             summary = result.summary
 
         # Assert: id=2 (FR) never enters the comparison at all.
@@ -379,7 +379,7 @@ class TestWhereFiltering:
         )
 
         # Act
-        with diff(old, new, key="id", where="contains(tags, `a`)") as result:
+        with diff(old, new, key="id", where='contains(tags, `"a"`)') as result:
             summary = result.summary
 
         # Assert
@@ -418,7 +418,7 @@ class TestWhereFiltering:
         )
 
         # Act
-        with diff(old, new, key=("a", "b"), where="country == `ES`") as result:
+        with diff(old, new, key=("a", "b"), where='country == `"ES"`') as result:
             summary = result.summary
 
         # Assert
@@ -436,7 +436,7 @@ class TestWhereFiltering:
         )
 
         # Act
-        with diff(old, new, key="id", where="country == `ES`", ignore=("/updated_at",)) as result:
+        with diff(old, new, key="id", where='country == `"ES"`', ignore=("/updated_at",)) as result:
             summary = result.summary
 
         # Assert

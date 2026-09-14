@@ -105,7 +105,7 @@ class TestCliExitCodes:
 
         # Act
         exit_code = main(
-            [str(old), str(new), "--key", "id", "--where", "country == `ES`", "--quiet"],
+            [str(old), str(new), "--key", "id", "--where", 'country == `"ES"`', "--quiet"],
         )
 
         # Assert: only id=1 (ES) participates, and it is modified.

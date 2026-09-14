@@ -18,23 +18,17 @@ each identity as `equal`, `added`, `deleted`, or `modified`.
 
 A text diff compares lines. That is usually the wrong model for datasets:
 reordering unchanged records creates noise, and inserting one record can make
-every later line appear different.
-
-`jsonl-diff` fills the gap between line-oriented tools and in-memory dataframe comparisons:
-
-- match records by identity, not physical position;
-- compare datasets larger than available RAM using temporary SQLite storage;
-- preserve original OLD and NEW line numbers for auditability;
-- expose the same behavior through a CLI and a small Python API.
+every later line appear different. `jsonl-diff` fills the gap between
+line-oriented tools and in-memory dataframe comparisons by matching records
+on identity instead of physical position.
 
 Use it for snapshots, ETL validation, migrations, exports, and CI checks. Use
 `diff`, `jq`, or a visual JSON diff instead when you need line-level,
 field-level, or JSON Patch output.
 
-The comparison is backed by a temporary SQLite index. Complete inputs and
-complete result sets do not need to fit in memory. Process memory is bounded by
-the largest record plus parser and SQLite buffers, while indexed data lives on
-temporary disk.
+Comparisons are disk-backed (see [Disk-backed architecture and temporary
+files](#disk-backed-architecture-and-temporary-files)), so complete inputs and
+result sets do not need to fit in memory.
 
 ## Features
 
@@ -45,7 +39,7 @@ temporary disk.
 - Semantic number comparison without binary floating-point rounding.
 - Deterministic summaries and changed-identity iteration.
 - Original OLD and NEW physical line numbers for every change.
-- Local, HTTP/HTTPS, file-like, and supported compressed sources through `py-jsonl`.
+- Local, HTTP/HTTPS, file-like, and supported compressed sources through [`py-jsonl`](https://github.com/rmoralespp/jsonl).
 - The same comparison engine through the CLI and Python API.
 - Disk-backed comparison with configurable `jsonl-diff` temporary storage.
 
@@ -91,7 +85,8 @@ Records:
 ```
 
 The result means one record is unchanged, one was added, and one existing
-record changed. Physical order does not affect these counts.
+record changed, regardless of physical order (see
+[Determinism](#determinism)).
 
 Diagnostics are written to standard error. Use `--quiet` when only the exit
 status or details file is needed.
@@ -168,19 +163,9 @@ jsonl-diff old.jsonl new.jsonl \
   --ignore /metadata/request_id
 ```
 
-Filter which records participate in the comparison with `--where`:
-
-```bash
-jsonl-diff old.jsonl new.jsonl \
-  --key id \
-  --where 'country == `ES`' \
-  --ignore /updated_at
-```
-
-`--where` accepts any valid [JMESPath expression](https://jmespath.org/specification.html).
-Bare backtick literals such as `` `ES` `` are accepted (as shown above) but are
-a deprecated JMESPath form; quoted literals such as `` `"ES"` `` are the
-current, warning-free syntax for JSON string literals.
+`--where` combines freely with `--key` and `--ignore` in the same invocation;
+see [Common pipelines](#common-pipelines) for an example and [Filtering with `--where`](#filtering-with---where) 
+for its semantics and literal syntax.
 
 ### Exit codes
 
@@ -241,7 +226,7 @@ with diff(
         "new.jsonl.gz",
         key=("country", "customerId"),
         ignore=("/updated_at",),
-        where="country == `ES`",
+        where="country == `\"ES\"`",
         duplicates="error",
         max_temp=2_000_000_000,
 ) as result:
