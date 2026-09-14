@@ -412,10 +412,12 @@ Records with the same identity are compared after ignored members are removed:
 - Arbitrary-precision integers and decimal values are not rounded through
   binary floating point.
 
-Canonical content is stored with its length and SHA-256 digest. Matching
-canonical bytes are still compared, so a digest match alone is not treated as
-proof of equality. Numbers are written using compact scientific notation; a
-large exponent does not expand into a large string of zeroes.
+Canonical content is reduced to its length and a SHA-256 digest before being
+stored; content is considered equal when both match. A length+SHA-256 match
+is treated as proof of equality (the same trade-off relied upon by tools such
+as `git` and `rsync`); the full canonical bytes are not retained for
+comparison. Numbers are written using compact scientific notation; a large
+exponent does not expand into a large string of zeroes.
 
 ### Determinism
 
@@ -428,16 +430,16 @@ locale-aware, or human-oriented sorting.
 
 Each record is parsed and validated incrementally, normalized, and inserted
 into a private SQLite database under an operating-system temporary directory.
-The database stores the typed canonical identity, original line, canonical
-content, content length, and digest. A uniqueness constraint detects duplicate
-identities. SQL joins calculate the summary, and ordered SQLite cursors drive
-lazy change iteration.
+The database stores the typed canonical identity, original line, content
+length, and SHA-256 digest; the full canonical bytes are not persisted. A
+uniqueness constraint detects duplicate identities. SQL joins calculate the
+summary, and ordered SQLite cursors drive lazy change iteration.
 
 This architecture bounds memory by the records currently being processed and
 database buffers; it does not keep the complete decoded inputs or all changes
-in RAM. It does require temporary disk space. Canonical records and SQLite
-indexes remain until the `DiffResult` is closed, so temporary usage can exceed
-twice the combined decompressed input size.
+in RAM. It does require temporary disk space. The identity, line, length, and
+digest index remains until the `DiffResult` is closed, so temporary usage
+scales with the number of records rather than the combined input size.
 
 `max_temp` / `--max-temp` accepts a positive byte count. The implementation
 limits and checks files in the workspace owned by `jsonl-diff`, raising

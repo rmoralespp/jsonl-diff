@@ -330,7 +330,6 @@ class DiffResult:
                 line INTEGER NOT NULL,
                 length INTEGER NOT NULL,
                 digest BLOB NOT NULL,
-                canonical BLOB NOT NULL,
                 PRIMARY KEY (side, identity)
             ) WITHOUT ROWID
             """,
@@ -372,7 +371,7 @@ class DiffResult:
             raise RuntimeError("the diff result is closed")
         requested = None if operation is None else ChangeOperation(operation)
         query = """
-            SELECT identity, line, length, digest, canonical
+            SELECT identity, line, length, digest
             FROM records
             WHERE side = ?
             ORDER BY identity
@@ -483,14 +482,13 @@ class DiffResult:
                 raise InputError(str(error), source, line) from error
             try:
                 cursor.execute(
-                    "{} INTO records VALUES (?, ?, ?, ?, ?, ?)".format(insert),
+                    "{} INTO records VALUES (?, ?, ?, ?, ?)".format(insert),
                     (
                         side,
                         identity,
                         line,
                         length,
                         digest,
-                        canonical,
                     ),
                 )
             except sqlite3.IntegrityError as error:
@@ -545,8 +543,7 @@ class DiffResult:
                  FROM records AS o JOIN records AS n USING (identity)
                  WHERE o.side = 0 AND n.side = 1
                    AND o.length = n.length
-                   AND o.digest = n.digest
-                   AND o.canonical = n.canonical),
+                   AND o.digest = n.digest),
                 (SELECT COUNT(*)
                  FROM records AS n
                  WHERE n.side = 1 AND NOT EXISTS (
@@ -565,7 +562,6 @@ class DiffResult:
                    AND (
                        o.length != n.length
                        OR o.digest != n.digest
-                       OR o.canonical != n.canonical
                    ))
             """,
         ).fetchone()
