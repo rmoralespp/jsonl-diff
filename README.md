@@ -10,9 +10,8 @@
   <img src="https://img.shields.io/github/license/rmoralespp/jsonl-diff.svg" alt="License">
 </p>
 
-`jsonl-diff` performs strict, identity-based reconciliation of JSONL/NDJSON
-datasets. It matches records by one or more top-level fields, then classifies
-each identity as `equal`, `added`, `deleted`, or `modified`.
+jsonl-diff compares large JSONL/NDJSON datasets by record identity, without loading the entire files 
+into memory. It matches records using one or more top-level fields and classifies each record as equal, added, deleted, or modified.
 
 ## Why jsonl-diff?
 

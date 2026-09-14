@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jsonl-diff"
 version = "0.1.0"
-description = "Strict, disk-backed reconciliation of large JSONL/NDJSON datasets for Python."
+description = "A lightweight, pure-Python tool for comparing large JSONL/NDJSON datasets without loading them entirely into memory."
 readme = "README.md"
 license = { file = "LICENSE" }
 keywords = ["jsonlines", "ndjson", "jsonl", "json", "gzip", "bzip2", "xz", "zst", "utilities", "serialization", "deserialization", "diff", "json-diff", "cli"]
