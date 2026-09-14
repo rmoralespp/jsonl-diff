@@ -92,6 +92,63 @@ class TestCliExitCodes:
         assert captured_exit.value.code == 3
         assert "the following arguments are required: --key" in captured.err
 
+    def test_where_filters_records_before_comparison(self, write_jsonl, capsys):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "country": "ES", "value": "old"}, {"id": 2, "country": "FR", "value": "old"}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "country": "ES", "value": "new"}, {"id": 2, "country": "FR", "value": "new"}],
+        )
+
+        # Act
+        exit_code = main(
+            [str(old), str(new), "--key", "id", "--where", "country == `ES`", "--quiet"],
+        )
+
+        # Assert: only id=1 (ES) participates, and it is modified.
+        assert exit_code == 1
+        assert capsys.readouterr() == ("", "")
+
+    def test_invalid_where_expression_exits_with_three(self, write_jsonl, capsys):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        with pytest.raises(SystemExit) as captured_exit:
+            main([str(old), str(new), "--key", "id", "--where", "country =="])
+        captured = capsys.readouterr()
+
+        # Assert
+        assert captured_exit.value.code == 3
+        assert not captured.out
+
+    def test_cli_and_python_api_agree_on_where_filtering(self, write_jsonl, capsys):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "active": True, "value": "old"}, {"id": 2, "active": False, "value": "old"}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "active": True, "value": "new"}, {"id": 2, "active": False, "value": "new"}],
+        )
+
+        # Act
+        exit_code = main(
+            [str(old), str(new), "--key", "id", "--where", "active == `true`", "--quiet"],
+        )
+        capsys.readouterr()
+        with jsonl_diff.diff(old, new, key="id", where="active == `true`") as result:
+            api_summary = result.summary
+
+        # Assert
+        assert (exit_code == 1) == api_summary.different
+        assert api_summary == jsonl_diff.Summary(equal=0, added=0, deleted=0, modified=1)
+
     def test_duplicate_policy_first_keeps_first_record(self, write_jsonl, capsys):
         # Arrange
         old = write_jsonl("old.jsonl", [{"id": 1}, {"id": 1, "ignored": True}])
@@ -215,6 +272,7 @@ class TestDetailsOutput:
             "type": "meta",
             "key": ["country", "customer"],
             "ignore": ["/volatile"],
+            "where": None,
             "duplicates": "error",
         }, {
             "type": "summary",

@@ -257,6 +257,218 @@ class TestIgnoredFields:
             diff(old, new, key="id", ignore=(pointer,))
 
 
+class TestWhereFiltering:
+    def test_where_omitted_behaves_like_before(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "country": "ES"}, {"id": 2, "country": "FR"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "country": "ES"}, {"id": 2, "country": "FR"}])
+
+        # Act
+        with diff(old, new, key="id") as result:
+            summary = result.summary
+
+        # Assert
+        assert result.config.where is None
+        assert summary == Summary(equal=2, added=0, deleted=0, modified=0)
+
+    def test_where_selects_matching_records_only(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "country": "ES", "value": "old"}, {"id": 2, "country": "FR", "value": "old"}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "country": "ES", "value": "new"}, {"id": 2, "country": "FR", "value": "new"}],
+        )
+
+        # Act
+        with diff(old, new, key="id", where="country == `ES`") as result:
+            summary = result.summary
+
+        # Assert: id=2 (FR) never enters the comparison at all.
+        assert summary == Summary(equal=0, added=0, deleted=0, modified=1)
+
+    def test_where_is_applied_independently_per_side(self, write_jsonl):
+        # Arrange: id=2 only matches the filter in NEW, so it must appear as
+        # an addition rather than modified/equal.
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "active": True}, {"id": 2, "active": False}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "active": True}, {"id": 2, "active": True}],
+        )
+
+        # Act
+        with diff(old, new, key="id", where="active == `true`") as result:
+            summary = result.summary
+            changes = list(result.changes())
+
+        # Assert
+        assert summary == Summary(equal=1, added=1, deleted=0, modified=0)
+        assert changes[0].operation == ChangeOperation.ADDED
+        assert changes[0].key == (Decimal("2"),)
+
+    def test_filtered_records_are_not_reported_as_changes(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "active": False, "value": "old"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "active": False, "value": "new"}])
+
+        # Act
+        with diff(old, new, key="id", where="active == `true`") as result:
+            summary = result.summary
+            changes = list(result.changes())
+
+        # Assert
+        assert summary == Summary(equal=0, added=0, deleted=0, modified=0)
+        assert changes == []
+
+    def test_filtered_records_do_not_trigger_duplicate_detection(self, write_jsonl):
+        # Arrange: two records share id=1 but only one passes the filter.
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "active": True}, {"id": 1, "active": False}],
+        )
+        new = write_jsonl("new.jsonl", [{"id": 1, "active": True}])
+
+        # Act
+        with diff(old, new, key="id", where="active == `true`") as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+
+    def test_where_runtime_type_error_is_reported_as_input_error(self, write_jsonl):
+        # Arrange: sum() requires an array of numbers; "values" holds strings.
+        old = write_jsonl("old.jsonl", [{"id": 1, "values": ["a", "b"]}])
+        new = write_jsonl("new.jsonl", [])
+
+        # Act / Assert
+        with pytest.raises(InputError, match="OLD at line 1"):
+            with diff(old, new, key="id", where="sum(values) > `0`"):
+                pass
+
+    def test_where_supports_nested_field_expressions(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "meta": {"active": True}, "value": "old"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "meta": {"active": True}, "value": "new"}])
+        skipped_old = write_jsonl("old_skip.jsonl", [{"id": 1, "meta": {"active": False}}])
+        skipped_new = write_jsonl("new_skip.jsonl", [{"id": 1, "meta": {"active": False}}])
+
+        # Act
+        with diff(old, new, key="id", where="meta.active == `true`") as matched:
+            matched_summary = matched.summary
+        with diff(skipped_old, skipped_new, key="id", where="meta.active == `true`") as skipped:
+            skipped_summary = skipped.summary
+
+        # Assert
+        assert matched_summary == Summary(equal=0, added=0, deleted=0, modified=1)
+        assert skipped_summary == Summary(equal=0, added=0, deleted=0, modified=0)
+
+    def test_where_supports_array_expressions(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "tags": ["a", "b"], "value": "old"}, {"id": 2, "tags": ["c"], "value": "old"}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "tags": ["a", "b"], "value": "new"}, {"id": 2, "tags": ["c"], "value": "new"}],
+        )
+
+        # Act
+        with diff(old, new, key="id", where="contains(tags, `a`)") as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=0, added=0, deleted=0, modified=1)
+
+    def test_where_filtering_out_all_records_is_not_an_error(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "active": False}])
+        new = write_jsonl("new.jsonl", [{"id": 2, "active": False}])
+
+        # Act
+        with diff(old, new, key="id", where="active == `true`") as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=0, added=0, deleted=0, modified=0)
+
+    def test_invalid_where_expression_is_a_configuration_error(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act / Assert
+        with pytest.raises(ConfigurationError):
+            diff(old, new, key="id", where="country ==")
+
+    def test_where_combined_with_composite_key(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"a": 1, "b": 2, "country": "ES", "value": "old"}, {"a": 3, "b": 4, "country": "FR", "value": "old"}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"a": 1, "b": 2, "country": "ES", "value": "new"}, {"a": 3, "b": 4, "country": "FR", "value": "new"}],
+        )
+
+        # Act
+        with diff(old, new, key=("a", "b"), where="country == `ES`") as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=0, added=0, deleted=0, modified=1)
+
+    def test_where_combined_with_ignore(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "country": "ES", "updated_at": "t0", "value": "same"}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "country": "ES", "updated_at": "t1", "value": "same"}],
+        )
+
+        # Act
+        with diff(old, new, key="id", where="country == `ES`", ignore=("/updated_at",)) as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+
+    def test_where_expression_is_compiled_once_and_reused(self, write_jsonl, monkeypatch):
+        # Arrange
+        import jmespath
+
+        import jsonl_diff
+
+        old = write_jsonl("old.jsonl", [{"id": 1, "active": True}, {"id": 2, "active": True}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "active": True}, {"id": 2, "active": True}])
+        calls = []
+        original_compile = jmespath.compile
+
+        def counting_compile(expression):
+            calls.append(expression)
+            return original_compile(expression)
+
+        monkeypatch.setattr(jsonl_diff.jmespath, "compile", counting_compile)
+
+        # Act
+        with diff(old, new, key="id", where="active == `true`") as result:
+            summary = result.summary
+
+        # Assert: compiled once for eager `_configuration` validation and once
+        # for `DiffResult.__init__`, never once per record (4 records total).
+        assert summary == Summary(equal=2, added=0, deleted=0, modified=0)
+        assert calls == ["active == `true`", "active == `true`"]
+
+
 class TestInputValidation:
     @pytest.mark.parametrize(
         "record",

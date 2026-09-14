@@ -30,6 +30,7 @@ classifiers = [
 ]
 dependencies = [
     "py-jsonl==1.5.2",
+    "jmespath>=1.0.0",
 ]
 
 [project.scripts]

@@ -39,33 +39,19 @@ temporary disk.
 ## Features
 
 - Single or composite top-level identities, independent of input order.
+- Optional `--where` JMESPath filtering to select which records participate.
 - Configurable duplicate handling with strict failure by default.
 - Exact RFC 6901 object-member ignores.
 - Semantic number comparison without binary floating-point rounding.
 - Deterministic summaries and changed-identity iteration.
 - Original OLD and NEW physical line numbers for every change.
-- Local, HTTP/HTTPS, file-like, and supported compressed sources through
-  `py-jsonl`.
+- Local, HTTP/HTTPS, file-like, and supported compressed sources through `py-jsonl`.
 - The same comparison engine through the CLI and Python API.
 - Disk-backed comparison with configurable `jsonl-diff` temporary storage.
 
 ## Requirements and installation
 
 `jsonl-diff` supports Python 3.8 through 3.14.
-
-Install it in a project managed by `uv`:
-
-```bash
-uv add jsonl-diff
-```
-
-Install the CLI as a standalone tool:
-
-```bash
-uv tool install jsonl-diff
-```
-
-`pip` is also supported:
 
 ```bash
 python -m pip install jsonl-diff
@@ -112,12 +98,14 @@ status or details file is needed.
 
 ### Common pipelines
 
-Filter JSONL with `jq` before comparing it. `-c` keeps one compact JSON object
-per line:
+Filter records with `--where` instead of preprocessing input externally; it
+runs once per source, inside the same disk-backed pipeline, with no extra
+process or intermediate file:
 
 ```bash
-jq -c 'select(has("deleted_at") and .deleted_at == null)' old.jsonl |
-  jsonl-diff - new.jsonl --key id
+jsonl-diff old.jsonl new.jsonl \
+  --key id \
+  --where 'deleted_at == `null`'
 ```
 
 Read compressed input directly when no preprocessing is required:
@@ -126,13 +114,13 @@ Read compressed input directly when no preprocessing is required:
 jsonl-diff old.jsonl.xz new.jsonl.gz --key id
 ```
 
-For two independent pipelines on Bash-compatible systems, use process
-substitution:
+For a quick spot-check on the first N records of two large files on
+Bash-compatible systems, use process substitution:
 
 ```bash
 jsonl-diff \
-  <(head -n 1000 old.jsonl | jq -c 'select(.active)') \
-  <(head -n 1000 new.jsonl | jq -c 'select(.active)') \
+  <(head -n 1000 old.jsonl) \
+  <(head -n 1000 new.jsonl) \
   --key id
 ```
 
@@ -141,23 +129,24 @@ jsonl-diff \
 ### CLI syntax and options
 
 ```text
-jsonl-diff [-h] --key KEY [--ignore IGNORE]
+jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
            [--duplicates {error,first,last}] [--details FILE] [--quiet]
            [--max-temp MAX_TEMP]
            old new
 ```
 
-| Argument | Meaning |
-|---|---|
-| `old` | OLD local path, HTTP/HTTPS source, or `-` for stdin. |
-| `new` | NEW local path, HTTP/HTTPS source, or `-` for stdin. |
-| `--key KEY` | Required top-level identity field. Repeat it or use a comma-separated value for a composite identity. |
-| `--ignore JSON_POINTER` | Exact RFC 6901 pointer to an object member to remove before content comparison. Repeatable. |
-| `--duplicates POLICY` | Handle repeated identities with `error` (default), `first`, or `last`. |
-| `--details FILE` | Write machine-readable JSONL details to `FILE`; details are never written to stdout. |
-| `--quiet` | Suppress the normal stdout summary. Errors still go to stderr. |
-| `--max-temp MAX_TEMP` | Limit storage owned by `jsonl-diff` to a positive integer number of bytes. |
-| `-h`, `--help` | Show command help and exit. |
+| Argument                | Meaning                                                                                                                                                                                            |
+|-------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `old`                   | OLD local path, HTTP/HTTPS source, or `-` for stdin.                                                                                                                                               |
+| `new`                   | NEW local path, HTTP/HTTPS source, or `-` for stdin.                                                                                                                                               |
+| `--key KEY`             | Required top-level identity field. Repeat it or use a comma-separated value for a composite identity.                                                                                              |
+| `--ignore JSON_POINTER` | Exact RFC 6901 pointer to an object member to remove before content comparison. Repeatable.                                                                                                        |
+| `--where EXPRESSION`    | [JMESPath](https://jmespath.org/) expression evaluated against each raw record. Only records for which it is truthy participate in the comparison; the rest behave as if absent from both sources. |
+| `--duplicates POLICY`   | Handle repeated identities with `error` (default), `first`, or `last`.                                                                                                                             |
+| `--details FILE`        | Write machine-readable JSONL details to `FILE`; details are never written to stdout.                                                                                                               |
+| `--quiet`               | Suppress the normal stdout summary. Errors still go to stderr.                                                                                                                                     |
+| `--max-temp MAX_TEMP`   | Limit storage owned by `jsonl-diff` to a positive integer number of bytes.                                                                                                                         |
+| `-h`, `--help`          | Show command help and exit.                                                                                                                                                                        |
 
 These composite-key forms are equivalent:
 
@@ -179,14 +168,28 @@ jsonl-diff old.jsonl new.jsonl \
   --ignore /metadata/request_id
 ```
 
+Filter which records participate in the comparison with `--where`:
+
+```bash
+jsonl-diff old.jsonl new.jsonl \
+  --key id \
+  --where 'country == `ES`' \
+  --ignore /updated_at
+```
+
+`--where` accepts any valid [JMESPath expression](https://jmespath.org/specification.html).
+Bare backtick literals such as `` `ES` `` are accepted (as shown above) but are
+a deprecated JMESPath form; quoted literals such as `` `"ES"` `` are the
+current, warning-free syntax for JSON string literals.
+
 ### Exit codes
 
-| Code | Meaning |
-|---:|---|
-| `0` | The inputs are equal under the configured rules. |
-| `1` | At least one added, deleted, or modified identity was found. |
-| `2` | A handled input, source, resource, output, or interruption error occurred. |
-| `3` | CLI usage or comparison configuration is invalid. |
+| Code | Meaning                                                                    |
+|-----:|----------------------------------------------------------------------------|
+|  `0` | The inputs are equal under the configured rules.                           |
+|  `1` | At least one added, deleted, or modified identity was found.               |
+|  `2` | A handled input, source, resource, output, or interruption error occurred. |
+|  `3` | CLI usage or comparison configuration is invalid.                          |
 
 Invalid argparse usage exits directly with code `3`. The Python API uses
 exceptions instead of these process exit codes.
@@ -204,7 +207,7 @@ For an OLD source containing identities `1` and `2`, and a NEW source
 containing changed identity `2` and added identity `3`, the file is:
 
 ```jsonl
-{"duplicates":"error","ignore":[],"key":["id"],"type":"meta"}
+{"duplicates":"error","ignore":[],"key":["id"],"type":"meta","where":null}
 {"key":[1],"old_line":1,"op":"deleted","type":"change"}
 {"key":[2],"new_line":1,"old_line":2,"op":"modified","type":"change"}
 {"key":[3],"new_line":2,"op":"added","type":"change"}
@@ -214,7 +217,8 @@ containing changed identity `2` and added identity `3`, the file is:
 Record types are:
 
 - **`meta`**: always first. `key` contains normalized identity-field names;
-  `ignore` contains the configured ignore pointers.
+  `ignore` contains the configured ignore pointers; `where` contains the
+  configured JMESPath expression, or `null` when `--where` was not used.
 - **`change`**: one per changed identity. `op` is `added`, `deleted`, or
   `modified`. `old_line` is present for deletions and modifications;
   `new_line` is present for additions and modifications. Equal records are not
@@ -233,12 +237,13 @@ returns exit code `2`.
 from jsonl_diff import ChangeOperation, diff
 
 with diff(
-    "old.jsonl.gz",
-    "new.jsonl.gz",
-    key=("country", "customerId"),
-    ignore=("/updated_at",),
-    duplicates="error",
-    max_temp=2_000_000_000,
+        "old.jsonl.gz",
+        "new.jsonl.gz",
+        key=("country", "customerId"),
+        ignore=("/updated_at",),
+        where="country == `ES`",
+        duplicates="error",
+        max_temp=2_000_000_000,
 ) as result:
     print(result.summary)
 
@@ -253,14 +258,16 @@ from typing import Any, Optional, Sequence, Union
 
 from jsonl_diff import DiffResult, DuplicatePolicy
 
+
 def diff(
-    old: Any,
-    new: Any,
-    *,
-    key: Union[str, Sequence[str]],
-    ignore: Sequence[str] = (),
-    duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
-    max_temp: Optional[int] = None,
+        old: Any,
+        new: Any,
+        *,
+        key: Union[str, Sequence[str]],
+        ignore: Sequence[str] = (),
+        where: Optional[str] = None,
+        duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
+        max_temp: Optional[int] = None,
 ) -> DiffResult:
     ...
 ```
@@ -333,16 +340,16 @@ raised.
 
 Source opening and decompression are delegated to `py-jsonl`:
 
-| Source | CLI | Python API |
-|---|:---:|:---:|
-| Local path | Yes | Yes, including path-like values |
-| HTTP/HTTPS URL | Yes | Yes |
-| File-like object | No | Yes |
-| gzip (`.gz`) | Yes | Yes |
-| bzip2 (`.bz2`) | Yes | Yes |
-| xz (`.xz`) | Yes | Yes |
-| Zstandard (`.zst`) | Python 3.14 only | Python 3.14 only |
-| ZIP archive | No | No |
+| Source             |       CLI        |           Python API            |
+|--------------------|:----------------:|:-------------------------------:|
+| Local path         |       Yes        | Yes, including path-like values |
+| HTTP/HTTPS URL     |       Yes        |               Yes               |
+| File-like object   |        No        |               Yes               |
+| gzip (`.gz`)       |       Yes        |               Yes               |
+| bzip2 (`.bz2`)     |       Yes        |               Yes               |
+| xz (`.xz`)         |       Yes        |               Yes               |
+| Zstandard (`.zst`) | Python 3.14 only |        Python 3.14 only         |
+| ZIP archive        |        No        |               No                |
 
 Zstandard availability follows `py-jsonl` and its use of Python 3.14's
 standard-library zstd support; it is not supported by this project on earlier
@@ -373,8 +380,8 @@ Identity fields are top-level object-member names. Each component must exist
 and be a string, number, boolean, or (composite identities only) `null`;
 objects and arrays are invalid. A single-field identity may not be `null`,
 since that would collapse every `null` record into one indistinguishable
-identity; a `null` value is only tolerated as one component of a composite
-(multi-field) identity, where the other components still keep the key
+identity; a `null` value is only tolerated as one component of a composite (multi-field) identity, where the other
+components still keep the key
 selective. Nested identity paths and automatic key detection are not
 supported.
 
@@ -403,6 +410,28 @@ Ignores are applied symmetrically before content canonicalization. A pointer
 may remove an entire array-valued object member, but it may not traverse an
 array or address an array element. Ignoring a top-level identity field is also
 invalid. Wildcards, JSONPath, and recursive name matching are not supported.
+
+### Filtering with `--where`
+
+`--where` accepts a [JMESPath](https://jmespath.org/) expression, evaluated
+against each raw record as it is parsed, before identity extraction, before
+`--ignore` removal, and before canonicalization. Only records for which the
+expression evaluates to a truthy value participate in the comparison; the
+rest are skipped as if they were absent from that source. Skipped records are
+never indexed, so they cannot be reported as `added`, `deleted`, or
+`modified`, and they never trigger duplicate-key detection.
+
+`--key`, `--where`, and `--ignore` have distinct, non-overlapping
+responsibilities: `--key` defines identity, `--where` defines which records
+participate at all, and `--ignore` defines which fields are excluded from
+content comparison once a record has been selected.
+
+The expression is parsed and validated once, before either input is read; an
+invalid expression is a `ConfigurationError` (CLI exit code `3`). The parsed
+expression is then reused for every record; it is never recompiled inside the
+per-record loop. `--where` is applied independently to OLD and to NEW, so a
+record may be filtered out of one side and kept on the other, which is
+reported like any other addition or deletion.
 
 ### Canonical content and numbers
 

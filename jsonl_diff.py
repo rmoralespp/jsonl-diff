@@ -15,6 +15,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
+import jmespath
 import jsonl
 
 Scalar = Union[str, Decimal, int, float, bool]
@@ -106,6 +107,7 @@ class DiffConfig:
 
     key: Tuple[str, ...]
     ignore: Tuple[str, ...] = ()
+    where: Optional[str] = None
     duplicates: DuplicatePolicy = DuplicatePolicy.ERROR
     max_temp: Optional[int] = None
 
@@ -287,6 +289,15 @@ def _identity(record: Dict[str, Any], keys: Sequence[str]) -> IdentityKey:
     return tuple(values)
 
 
+def _compile_where(expression: str) -> Any:
+    try:
+        return jmespath.compile(expression)
+    except jmespath.exceptions.JMESPathError as error:
+        raise ConfigurationError(
+            "invalid --where expression {!r}: {}".format(expression, error),
+        ) from error
+
+
 def _records(source: Any, on_error: Any) -> Iterator[Any]:
     yield from jsonl.load(
         source,
@@ -306,6 +317,9 @@ class DiffResult:
         self._new = new
         self.config = config
         self._ignore_tree = _ignore_tree(config.ignore, config.key)
+        # Compiled once here and reused for every record; never recompiled
+        # inside the per-record processing loop (see `_insert_records`).
+        self._where = None if config.where is None else _compile_where(config.where)
         self._workspace = None
         self._connection = None
         self._summary_value = None
@@ -480,6 +494,13 @@ class DiffResult:
         for line, record in enumerate(records, start=1):
             if not isinstance(record, dict):
                 raise InputError("each record must be a JSON object", source, line)
+            if self._where is not None:
+                try:
+                    matched = bool(self._where.search(record))
+                except (TypeError, ValueError) as error:
+                    raise InputError(str(error), source, line) from error
+                if not matched:
+                    continue
             try:
                 key = _identity(record, self.config.key)
                 normalized = _remove_ignored(record, self._ignore_tree)
@@ -579,6 +600,7 @@ class DiffResult:
 def _configuration(
     key: Union[str, Sequence[str]],
     ignore: Sequence[str],
+    where: Optional[str],
     duplicates: Union[str, DuplicatePolicy],
     max_temp: Optional[int],
 ) -> DiffConfig:
@@ -590,6 +612,11 @@ def _configuration(
     keys = tuple(sorted(keys))
     ignores = tuple(dict.fromkeys(ignore))
     _ignore_tree(ignores, keys)
+    if where is not None:
+        # Validated eagerly, before any input is read; the resulting parsed
+        # expression is discarded here and recompiled once more (and only
+        # once) in `DiffResult.__init__` for actual per-record evaluation.
+        _compile_where(where)
     try:
         duplicate_policy = DuplicatePolicy(duplicates)
     except ValueError as error:
@@ -599,7 +626,7 @@ def _configuration(
         and (not isinstance(max_temp, int) or isinstance(max_temp, bool) or max_temp <= 0)
     ):
         raise ConfigurationError("max_temp must be a positive integer")
-    return DiffConfig(keys, ignores, duplicate_policy, max_temp)
+    return DiffConfig(keys, ignores, where, duplicate_policy, max_temp)
 
 
 def diff(
@@ -608,11 +635,12 @@ def diff(
     *,
     key: Union[str, Sequence[str]],
     ignore: Sequence[str] = (),
+    where: Optional[str] = None,
     duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
     max_temp: Optional[int] = None,
 ) -> DiffResult:
     """Create a context-managed, disk-backed comparison."""
-    config = _configuration(key, ignore, duplicates, max_temp)
+    config = _configuration(key, ignore, where, duplicates, max_temp)
     return DiffResult(old, new, config)
 
 
@@ -644,6 +672,7 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
             "type": "meta",
             "key": list(result.config.key),
             "ignore": list(result.config.ignore),
+            "where": result.config.where,
             "duplicates": result.config.duplicates.value,
         }
         for change in result.changes():
@@ -671,6 +700,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("new")
     parser.add_argument("--key", action="append", required=True)
     parser.add_argument("--ignore", action="append", default=[])
+    parser.add_argument("--where")
     parser.add_argument(
         "--duplicates",
         choices=tuple(policy.value for policy in DuplicatePolicy),
@@ -688,6 +718,7 @@ def _run_comparison(arguments: argparse.Namespace, old: Any, new: Any, keys: Tup
         new,
         key=keys,
         ignore=arguments.ignore,
+        where=arguments.where,
         duplicates=arguments.duplicates,
         max_temp=arguments.max_temp,
     ) as result:
