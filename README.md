@@ -11,12 +11,7 @@
 Compare large JSONL/NDJSON datasets **by record identity instead of line
 position**, without loading the complete inputs into memory.
 
-`jsonl-diff` matches records using one or more top-level fields and reports:
-
-* `equal`
-* `added`
-* `deleted`
-* `modified`
+`jsonl-diff` matches records using one or more top-level fields and reports: `equal` `added` `deleted` `modified`
 
 It is useful for snapshots, ETL validation, migrations, exports, and CI checks.
 
@@ -24,10 +19,8 @@ It is useful for snapshots, ETL validation, migrations, exports, and CI checks.
 
 ## Installation
 
-Python 3.8–3.14.
-
 ```bash
-python -m pip install jsonl-diff
+pip install jsonl-diff
 ```
 
 ## Quick start
@@ -67,9 +60,9 @@ Record order does not matter.
 
 * Single or composite top-level identities.
 * Disk-backed comparison for large datasets ([architecture](docs/architecture.md)).
-* Optional JMESPath filtering with `--where`.
+* Optional **JMESPath** filtering with `--where`.
 * Configurable duplicate handling: `error`, `first`, or `last`.
-* Exact RFC 6901 JSON Pointer ignores.
+* Exact **RFC 6901** JSON Pointer ignores.
 * Semantic number comparison using `Decimal`.
 * Deterministic summaries and change iteration.
 * Original OLD/NEW physical line numbers.
