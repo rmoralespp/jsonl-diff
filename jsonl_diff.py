@@ -283,10 +283,10 @@ def _identity(record: Dict[str, Any], keys: Sequence[str]) -> IdentityKey:
             raise ValueError("missing identity field {!r}".format(name))
         value = record[name]
         if value is None:
-            # A null component is only tolerated within a composite (multi-field)
-            # identity, where the other components still keep the key selective.
-            # A single-field identity may not be null, since it would collapse
-            # every null record into one indistinguishable identity.
+            # Composite identities may contain null components; uniqueness is
+            # still enforced on the complete identity tuple. A single-field
+            # identity may not be null, since that would collapse every null
+            # record into one indistinguishable identity.
             if not composite:
                 raise ValueError("identity field {!r} must be a non-null scalar".format(name))
         elif not isinstance(value, (str, Decimal, bool)):

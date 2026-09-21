@@ -26,9 +26,9 @@ and be a string, number, boolean, or (composite identities only) `null`;
 objects and arrays are invalid. A single-field identity may not be `null`,
 since that would collapse every `null` record into one indistinguishable
 identity; a `null` value is only tolerated as one component of a composite
-(multi-field) identity, where the other components still keep the key
-selective. Nested identity paths and automatic key detection are not
-supported.
+(multi-field) identity. Uniqueness is still enforced on the complete
+identity tuple, so a tuple containing only `null` values can still collide.
+Nested identity paths and automatic key detection are not supported.
 
 Composite identity field names are sorted lexically before their values are
 extracted. Consequently, `key=("b", "a")` and `key=("a", "b")` both produce
