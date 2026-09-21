@@ -23,6 +23,10 @@ IdentityKey = Tuple[Union[str, Decimal, bool, None], ...]
 
 _MISSING = object()
 
+# Avoid per-record filesystem scans: SQLite already enforces the main size limit.
+# Check periodically and once after each side finishes to catch extra temp/journal growth.
+_SIZE_CHECK_INTERVAL = 1024
+
 
 class JsonlDiffError(Exception):
     """Base exception for jsonl-diff failures."""
@@ -110,6 +114,7 @@ class DiffConfig:
     where: Optional[str] = None
     duplicates: DuplicatePolicy = DuplicatePolicy.ERROR
     max_temp: Optional[int] = None
+    where_expression: Any = None
 
 
 @dataclass(frozen=True)
@@ -317,9 +322,9 @@ class DiffResult:
         self._new = new
         self.config = config
         self._ignore_tree = _ignore_tree(config.ignore, config.key)
-        # Compiled once here and reused for every record; never recompiled
-        # inside the per-record processing loop (see `_insert_records`).
-        self._where = None if config.where is None else _compile_where(config.where)
+        # Compiled during configuration validation and reused for every record;
+        # never compile inside the per-record processing loop.
+        self._where = config.where_expression
         self._workspace = None
         self._connection = None
         self._summary_value = None
@@ -528,7 +533,7 @@ class DiffResult:
                 raise DuplicateKeyError(key, source, (first, line)) from error
             except sqlite3.DatabaseError as error:
                 raise ResourceError("could not write the temporary index") from error
-            if self.config.max_temp is not None:
+            if self.config.max_temp is not None and line % _SIZE_CHECK_INTERVAL == 0:
                 self._check_size()
         self._check_size()
 
@@ -612,11 +617,7 @@ def _configuration(
     keys = tuple(sorted(keys))
     ignores = tuple(dict.fromkeys(ignore))
     _ignore_tree(ignores, keys)
-    if where is not None:
-        # Validated eagerly, before any input is read; the resulting parsed
-        # expression is discarded here and recompiled once more (and only
-        # once) in `DiffResult.__init__` for actual per-record evaluation.
-        _compile_where(where)
+    where_expression = None if where is None else _compile_where(where)
     try:
         duplicate_policy = DuplicatePolicy(duplicates)
     except ValueError as error:
@@ -626,7 +627,7 @@ def _configuration(
         and (not isinstance(max_temp, int) or isinstance(max_temp, bool) or max_temp <= 0)
     ):
         raise ConfigurationError("max_temp must be a positive integer")
-    return DiffConfig(keys, ignores, where, duplicate_policy, max_temp)
+    return DiffConfig(keys, ignores, where, duplicate_policy, max_temp, where_expression)
 
 
 def diff(

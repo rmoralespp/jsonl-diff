@@ -27,6 +27,13 @@ limits and checks files in the workspace owned by `jsonl-diff`, raising
 `ResourceError` (CLI exit `2`) when the index cannot stay within that budget.
 Choose a limit with room for SQLite pages and index overhead.
 
+The filesystem-level check (stat-ing every workspace file) runs every 1024
+inserted records per side, plus once more after each side finishes, rather
+than after every record; this keeps large-input indexing fast. SQLite's own
+`max_page_count` (derived from `max_temp`) still rejects oversized writes to
+the main index immediately, so effective enforcement is not weakened by the
+periodic check.
+
 `py-jsonl` may create its own temporary staging files for remote or compressed
 sources. Those files follow `py-jsonl`'s resource policy and are not counted by
 `jsonl-diff`'s `max_temp` limit. Total system temporary usage can therefore

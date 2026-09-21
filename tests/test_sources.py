@@ -9,6 +9,7 @@ import threading
 
 import pytest
 
+import jsonl_diff
 from jsonl_diff import ConfigurationError, InputError, ResourceError, Summary, diff
 
 
@@ -144,6 +145,36 @@ class TestTemporaryStorage:
         with pytest.raises(ResourceError):
             with diff(old, new, key="id", max_temp=16 * 1024):
                 pass
+
+    def test_size_is_checked_periodically_rather_than_per_record(
+        self,
+        write_jsonl,
+        monkeypatch,
+    ):
+        # Arrange: enough records to span several check intervals, but well
+        # under max_temp, so no ResourceError interferes with the count.
+        interval = jsonl_diff._SIZE_CHECK_INTERVAL
+        record_count = interval * 2
+        old = write_jsonl("old.jsonl", [{"id": index} for index in range(record_count)])
+        new = write_jsonl("new.jsonl", [])
+        calls = []
+        original_check_size = jsonl_diff.DiffResult._check_size
+
+        def counting_check_size(self):
+            calls.append(1)
+            return original_check_size(self)
+
+        monkeypatch.setattr(jsonl_diff.DiffResult, "_check_size", counting_check_size)
+
+        # Act
+        with diff(old, new, key="id", max_temp=10 * 1024 * 1024):
+            pass
+
+        # Assert: two periodic checks plus a final check per side (OLD), and
+        # just the final check for the empty NEW side; far fewer than
+        # `record_count` calls.
+        assert len(calls) == (record_count // interval + 1) + 1
+        assert len(calls) < record_count
 
     def test_input_error_is_reported(self, write_jsonl):
         # Arrange

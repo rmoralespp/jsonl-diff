@@ -33,7 +33,9 @@ supported.
 Composite identity field names are sorted lexically before their values are
 extracted. Consequently, `key=("b", "a")` and `key=("a", "b")` both produce
 keys in `(a, b)` order and match identically. Repeated or empty identity-field
-names are configuration errors.
+names are configuration errors. On the CLI, `--key` names are trimmed of
+surrounding whitespace before this check, so `--key " country , customer "`
+is equivalent to `--key country,customer`.
 
 JSON types remain significant: `"1"` is different from `1`, and `true` is
 different from `1`.

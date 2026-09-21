@@ -463,10 +463,10 @@ class TestWhereFiltering:
         with diff(old, new, key="id", where="active == `true`") as result:
             summary = result.summary
 
-        # Assert: compiled once for eager `_configuration` validation and once
-        # for `DiffResult.__init__`, never once per record (4 records total).
+        # Assert: compiled once during eager configuration validation and reused
+        # for every record (4 records total).
         assert summary == Summary(equal=2, added=0, deleted=0, modified=0)
-        assert calls == ["active == `true`", "active == `true`"]
+        assert calls == ["active == `true`"]
 
 
 class TestInputValidation:
