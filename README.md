@@ -59,14 +59,14 @@ Record order does not matter.
 ## Features
 
 * Single or composite top-level identities.
-* Disk-backed comparison for large datasets ([architecture](docs/architecture.md)).
+* Disk-backed comparison for large datasets ([architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md)).
 * Optional **JMESPath** filtering with `--where`.
 * Configurable duplicate handling: `error`, `first`, or `last`.
 * Exact **RFC 6901** JSON Pointer ignores.
 * Semantic number comparison using `Decimal`.
 * Deterministic summaries and change iteration.
 * Original OLD/NEW physical line numbers.
-* Machine-readable JSONL change log with `--details` ([format](docs/details-format.md)).
+* Machine-readable JSONL change log with `--details` ([format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md)).
 * Local, HTTP/HTTPS, file-like, and supported compressed sources.
 * CLI and Python API using the same comparison engine.
 
@@ -158,7 +158,7 @@ The public exception hierarchy is rooted at `JsonlDiffError`:
 * `DuplicateKeyError`
 * `ResourceError`
 
-See the [Python API reference](docs/python-api.md) for the full callable
+See the [Python API reference](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/python-api.md) for the full callable
 signature, result models, `Decimal` key semantics, and error hierarchy.
 
 ## Comparison semantics
@@ -177,7 +177,7 @@ signature, result models, `Decimal` key semantics, and error hierarchy.
 
 `--where` selects which records participate; `--key` defines identity;
 `--ignore` removes fields from content comparison. See
-[Comparison semantics](docs/comparison-semantics.md) for the full rules,
+[Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) for the full rules,
 including duplicate handling, ignore-pointer edge cases, `--where` evaluation
 order, and canonical number formatting.
 
@@ -193,7 +193,7 @@ Supported compression:
 * xz
 * Zstandard on Python 3.14
 
-See [architecture](docs/architecture.md) for the full source/compression
+See [architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md) for the full source/compression
 support matrix and how sources are delegated to `py-jsonl`.
 
 ## Limitations
@@ -214,10 +214,10 @@ It is a **dataset reconciliation tool**, not a general-purpose visual JSON diff.
 
 ## Further reading
 
-* [Comparison semantics](docs/comparison-semantics.md) — identity, duplicates, ignores, `--where`, canonical numbers, determinism.
-* [Disk-backed architecture](docs/architecture.md) — SQLite index, `max_temp`, cleanup, sources and compression.
-* [Details JSONL format](docs/details-format.md) — machine-readable `--details` output schema.
-* [Python API reference](docs/python-api.md) — full signature, result models, and error hierarchy.
+* [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) — identity, duplicates, ignores, `--where`, canonical numbers, determinism.
+* [Disk-backed architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md) — SQLite index, `max_temp`, cleanup, sources and compression.
+* [Details JSONL format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md) — machine-readable `--details` output schema.
+* [Python API reference](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/python-api.md) — full signature, result models, and error hierarchy.
 
 ## Development
 
