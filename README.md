@@ -88,7 +88,7 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--duplicates POLICY` | `error` (default), `first`, or `last`                                          |
 | `--details FILE`      | Write deterministic machine-readable JSONL changes                             |
 | `--quiet`             | Suppress the normal summary                                                    |
-| `--max-temp BYTES`    | Limit `jsonl-diff` temporary storage                                           |
+| `--max-temp BYTES`    | Best-effort budget for `jsonl-diff` workspace temporary storage                |
 
 Examples:
 

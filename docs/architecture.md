@@ -22,17 +22,20 @@ scales with the number of records rather than the combined input size.
 
 ## `max_temp` / `--max-temp`
 
-`max_temp` / `--max-temp` accepts a positive byte count. The implementation
-limits and checks files in the workspace owned by `jsonl-diff`, raising
-`ResourceError` (CLI exit `2`) when the index cannot stay within that budget.
-Choose a limit with room for SQLite pages and index overhead.
+`max_temp` / `--max-temp` accepts a positive byte count and acts as a
+best-effort budget for files in the workspace owned by `jsonl-diff`; it is not
+a global temporary-storage limit for the whole process. The implementation
+raises `ResourceError` (CLI exit `2`) when the workspace is observed above the
+configured budget. Choose a limit with room for SQLite pages and index
+overhead.
 
 The filesystem-level check (stat-ing every workspace file) runs every 1024
 inserted records per side, plus once more after each side finishes, rather
 than after every record; this keeps large-input indexing fast. SQLite's own
 `max_page_count` (derived from `max_temp`) still rejects oversized writes to
-the main index immediately, so effective enforcement is not weakened by the
-periodic check.
+the main index immediately, but it does not account for every file in the
+workspace and the periodic filesystem check can observe growth between
+checks.
 
 `py-jsonl` may create its own temporary staging files for remote or compressed
 sources. Those files follow `py-jsonl`'s resource policy and are not counted by

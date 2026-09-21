@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Docs:** Clarify that `max_temp` is a best-effort budget for the `jsonl-diff` workspace, not a global limit for all temporary storage used by the process.
 - **Docs:** Clarify that composite identities may contain `null` components, but uniqueness is always enforced on the complete identity tuple.
 - **Changed:** Internal JSON value types now distinguish parser-produced `Decimal` numbers from native Python `int`/`float` values accepted only by numeric canonicalization helpers.
 - **Changed:** Compile `--where` expressions once and reuse them during indexing.
