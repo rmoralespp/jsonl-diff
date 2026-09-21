@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Changed:** Internal JSON value types now distinguish parser-produced `Decimal` numbers from native Python `int`/`float` values accepted only by numeric canonicalization helpers.
 - **Changed:** Compile `--where` expressions once and reuse them during indexing.
 - **Changed:** Run `--max-temp` size checks periodically, improving large-input indexing speed by ~8x while retaining limits.
 - **Fixed:** Trim whitespace from `--key` names and reject empty values correctly.

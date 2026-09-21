@@ -18,8 +18,9 @@ from typing import Any, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Uni
 import jmespath
 import jsonl
 
-Scalar = Union[str, Decimal, int, float, bool]
-IdentityKey = Tuple[Union[str, Decimal, bool, None], ...]
+JsonScalar = Union[str, Decimal, bool, None]
+Number = Union[Decimal, int, float]
+IdentityKey = Tuple[JsonScalar, ...]
 
 _MISSING = object()
 
@@ -160,7 +161,7 @@ def _decode_json(value: str) -> Any:
     )
 
 
-def _number(value: Scalar) -> str:
+def _number(value: Number) -> str:
     if isinstance(value, float):
         if not math.isfinite(value):
             raise ValueError("non-finite numbers are not valid JSON")
@@ -288,7 +289,7 @@ def _identity(record: Dict[str, Any], keys: Sequence[str]) -> IdentityKey:
             # every null record into one indistinguishable identity.
             if not composite:
                 raise ValueError("identity field {!r} must be a non-null scalar".format(name))
-        elif not isinstance(value, (str, Decimal, int, float, bool)):
+        elif not isinstance(value, (str, Decimal, bool)):
             raise ValueError("identity field {!r} must be a non-null scalar".format(name))
         values.append(value)
     return tuple(values)
