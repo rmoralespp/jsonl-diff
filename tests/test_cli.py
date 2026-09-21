@@ -201,6 +201,50 @@ class TestCliExitCodes:
         assert "cannot both read from stdin" in capsys.readouterr().err
 
 
+class TestKeyOptionParsing:
+    def test_comma_separated_keys_with_surrounding_whitespace_are_trimmed(
+        self,
+        write_jsonl,
+        capsys,
+    ):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"country": "ES", "customer": 1, "value": "before"}])
+        new = write_jsonl("new.jsonl", [{"country": "ES", "customer": 1, "value": "after"}])
+
+        # Act
+        exit_code = main(
+            [str(old), str(new), "--key", " country , customer ", "--quiet"],
+        )
+
+        # Assert
+        assert exit_code == 1
+        assert capsys.readouterr() == ("", "")
+
+    def test_empty_key_name_after_trimming_is_a_configuration_error(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        with pytest.raises(SystemExit) as captured_exit:
+            main([str(old), str(new), "--key", "id, "])
+
+        # Assert
+        assert captured_exit.value.code == 3
+
+    def test_whitespace_only_key_name_is_a_configuration_error(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        with pytest.raises(SystemExit) as captured_exit:
+            main([str(old), str(new), "--key", "   "])
+
+        # Assert
+        assert captured_exit.value.code == 3
+
+
 class TestTextOutput:
     def test_summary_format_ok(self, write_jsonl, capsys):
         # Arrange

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Fixed:** CLI `--key` names are now trimmed of surrounding whitespace before validation, so comma/repeat-separated values like `--key " country , customer "` no longer produce a spurious "missing identity field" error and empty/whitespace-only names are correctly rejected as configuration errors.
+
 ## v0.1.1
 
 - **Added:** `--where` to filter which records participate in the comparison using a JMESPath expression.

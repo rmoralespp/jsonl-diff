@@ -738,7 +738,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error("OLD and NEW cannot both read from stdin")
     old = sys.stdin.buffer if arguments.old == "-" else arguments.old
     new = sys.stdin.buffer if arguments.new == "-" else arguments.new
-    keys = tuple(name for item in arguments.key for name in item.split(","))
+    keys = tuple(name.strip() for item in arguments.key for name in item.split(","))
     try:
         return _run_comparison(arguments, old, new, keys)
     except ConfigurationError as error:
