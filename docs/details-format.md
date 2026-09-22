@@ -3,7 +3,10 @@
 [← Back to README](../README.md)
 
 `--details FILE` (CLI) streams a deterministic, machine-readable JSONL report
-after both inputs have been completely indexed and validated:
+after both inputs have been completely indexed and validated. Counters, line
+numbers, and numeric keys use readable JSON number notation without losing
+precision; only magnitudes that would require an extremely long fixed
+representation use exponent notation.
 
 ```bash
 jsonl-diff old.jsonl new.jsonl --key id --details changes.jsonl
@@ -36,7 +39,3 @@ containing changed identity `2` and added identity `3`, the file is:
 The normal stdout summary is unchanged when `--details` is used, unless
 `--quiet` suppresses it. A write failure can leave a partial details file and
 returns exit code `2`.
-
-Counters, line numbers, and numeric keys use readable JSON number notation.
-Numeric precision is preserved; only magnitudes that would require an
-extremely long fixed representation use exponent notation.
