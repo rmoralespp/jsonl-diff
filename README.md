@@ -15,8 +15,6 @@ position**, without loading the complete inputs into memory.
 
 It is useful for snapshots, ETL validation, migrations, exports, and CI checks.
 
-> For line-level, field-level, JSON Patch, or visual diffs, use a tool designed for those purposes instead.
-
 ## Installation
 
 ```bash
@@ -67,15 +65,16 @@ Record order does not matter.
 * Deterministic summaries and change iteration.
 * Original OLD/NEW physical line numbers.
 * Machine-readable JSONL change log with `--details` ([format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md)).
+* Opt-in field-level diffs for modified records using RFC 6901 JSON Pointers.
 * Local, HTTP/HTTPS, file-like, and supported compressed sources.
-* CLI and Python API using the same comparison engine.
+* Shared record-level comparison engine for the CLI and Python API.
 
 ## CLI
 
 ```text
 jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
-           [--duplicates {error,first,last}] [--details FILE] [--quiet]
-           [--max-temp MAX_TEMP]
+           [--duplicates {error,first,last}] [--details FILE] [--field-diff]
+           [--quiet] [--max-temp MAX_TEMP]
            old new
 ```
 
@@ -87,6 +86,7 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--where EXPRESSION`  | JMESPath filter applied to each record                                         |
 | `--duplicates POLICY` | `error` (default), `first`, or `last`                                          |
 | `--details FILE`      | Write deterministic machine-readable JSONL changes                             |
+| `--field-diff`        | Add field changes (requires `--details` and sources other than stdin)          |
 | `--quiet`             | Suppress the normal summary                                                    |
 | `--max-temp BYTES`    | Best-effort budget for `jsonl-diff` workspace temporary storage                |
 
@@ -109,6 +109,11 @@ jsonl-diff old.jsonl new.jsonl \
 
 # Compressed input
 jsonl-diff old.jsonl.xz new.jsonl.gz --key id
+
+# Explain which fields changed in modified records
+jsonl-diff old.jsonl new.jsonl --key id \
+  --details changes.jsonl \
+  --field-diff
 ```
 
 ### Exit codes
@@ -184,7 +189,8 @@ order, and canonical number formatting.
 ## Sources & compression
 
 Supported sources include local paths and HTTP/HTTPS URLs. The Python API
-also accepts file-like objects.
+also accepts file-like objects. `--field-diff` must read both sources again,
+so it cannot be combined with stdin.
 
 Supported compression:
 
@@ -201,7 +207,7 @@ support matrix and how sources are delegated to `py-jsonl`.
 `jsonl-diff` does **not** provide:
 
 * line/position-based diffs
-* field-level diffs or JSON Patch
+* JSON Patch output
 * move/rename detection
 * nested identities or automatic key detection
 * fuzzy matching or numeric tolerances
@@ -228,7 +234,9 @@ uv run pytest
 uv run ruff check --quiet --output-format=concise .
 ```
 
-The test suite covers CLI behavior, identity/canonicalization, validation, details output, sources, compression, temporary limits, and cleanup.
+The test suite covers CLI behavior, identity/canonicalization, validation,
+record- and field-level details, sources, compression, temporary limits, and
+cleanup.
 
 ## License
 

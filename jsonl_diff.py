@@ -219,6 +219,38 @@ def _canonical(value: Any) -> bytes:
     return _canonical_text(value).encode("utf-8")
 
 
+def _pointer_child(path: str, token: Union[str, int]) -> str:
+    escaped = str(token).replace("~", "~0").replace("/", "~1")
+    return "{}/{}".format(path, escaped)
+
+
+def _structural_changes(old: Any, new: Any, path: str = "") -> Iterator[Dict[str, Any]]:
+    if type(old) is not type(new):
+        yield {"path": path, "old": old, "new": new}
+        return
+    if isinstance(old, dict):
+        for name in sorted(old.keys() | new.keys()):
+            child_path = _pointer_child(path, name)
+            if name not in old:
+                yield {"path": child_path, "new": new[name]}
+            elif name not in new:
+                yield {"path": child_path, "old": old[name]}
+            else:
+                yield from _structural_changes(old[name], new[name], child_path)
+        return
+    if isinstance(old, list):
+        common_length = min(len(old), len(new))
+        for index in range(common_length):
+            yield from _structural_changes(old[index], new[index], _pointer_child(path, index))
+        for index in range(common_length, len(old)):
+            yield {"path": _pointer_child(path, index), "old": old[index]}
+        for index in range(common_length, len(new)):
+            yield {"path": _pointer_child(path, index), "new": new[index]}
+        return
+    if old != new:
+        yield {"path": path, "old": old, "new": new}
+
+
 def _fingerprint(canonical: bytes) -> Tuple[int, bytes]:
     return len(canonical), hashlib.sha256(canonical).digest()
 
@@ -602,6 +634,163 @@ class DiffResult:
         ).fetchone()
         return Summary(*(int(value or 0) for value in row))
 
+    def _prepare_field_diff(self) -> None:
+        try:
+            self._create_field_diff_tables()
+            self._check_size()
+            for side, source in enumerate((self._old, self._new)):
+                self._retrieve_field_records(source, side)
+        except sqlite3.DatabaseError as error:
+            raise ResourceError("could not store records for field diff") from error
+
+    def _create_field_diff_tables(self) -> None:
+        with self._connection:
+            self._connection.execute(
+                """
+                CREATE TABLE field_targets (
+                    side INTEGER NOT NULL,
+                    line INTEGER NOT NULL,
+                    identity BLOB NOT NULL,
+                    length INTEGER NOT NULL,
+                    digest BLOB NOT NULL,
+                    PRIMARY KEY (side, line)
+                ) WITHOUT ROWID
+                """,
+            )
+            self._connection.execute(
+                """
+                CREATE TABLE field_records (
+                    side INTEGER NOT NULL,
+                    identity BLOB NOT NULL,
+                    content BLOB NOT NULL,
+                    PRIMARY KEY (identity, side)
+                ) WITHOUT ROWID
+                """,
+            )
+            self._connection.execute(
+                """
+                INSERT INTO field_targets
+                SELECT 0, o.line, o.identity, o.length, o.digest
+                FROM records AS o JOIN records AS n USING (identity)
+                WHERE o.side = 0 AND n.side = 1
+                  AND (
+                      o.length != n.length
+                      OR o.digest != n.digest
+                  )
+                UNION ALL
+                SELECT 1, n.line, n.identity, n.length, n.digest
+                FROM records AS o JOIN records AS n USING (identity)
+                WHERE o.side = 0 AND n.side = 1
+                  AND (
+                      o.length != n.length
+                      OR o.digest != n.digest
+                  )
+                """,
+            )
+
+    def _field_diff_targets(self, side: int) -> Iterator[Tuple[int, bytes, int, bytes]]:
+        yield from self._connection.execute(
+            """
+            SELECT line, identity, length, digest
+            FROM field_targets
+            WHERE side = ?
+            ORDER BY line
+            """,
+            (side,),
+        )
+
+    def _retrieve_field_records(
+        self,
+        source: Any,
+        side: int,
+    ) -> None:
+        name = "OLD" if side == 0 else "NEW"
+        if hasattr(source, "read"):
+            try:
+                source.seek(0)
+            except (AttributeError, OSError) as error:
+                raise InputError("field diff requires a source that can be read again", name) from error
+
+        error_line = [None]
+
+        def on_error(line: int, error: Exception) -> None:
+            error_line[0] = line
+
+        try:
+            with self._connection:
+                records = _records(source, on_error)
+                targets = self._field_diff_targets(side)
+                selected = self._target_field_records(records, targets, name)
+                for line, record, target in selected:
+                    self._store_field_record(side, name, line, record, target)
+        except JsonlDiffError:
+            raise
+        except sqlite3.DatabaseError:
+            raise
+        except (OSError, EOFError, TypeError, ValueError, RuntimeError) as error:
+            line = error_line[0]
+            message = "invalid input ({})".format(type(error).__name__)
+            raise InputError(message, name, line) from error
+        self._check_size()
+
+    @staticmethod
+    def _target_field_records(
+        records: Iterable[Any],
+        targets: Iterator[Tuple[int, bytes, int, bytes]],
+        source: str,
+    ) -> Iterator[Tuple[int, Any, Tuple[bytes, int, bytes]]]:
+        target = next(targets, None)
+        if target is None:
+            return
+        for line, record in enumerate(records, start=1):
+            target_line, identity, length, digest = target
+            if line < target_line:
+                continue
+            if line != target_line:
+                raise InputError("source changed while generating field diff", source, target_line)
+            yield line, record, (identity, length, digest)
+            target = next(targets, None)
+            if target is None:
+                return
+        raise InputError("source changed while generating field diff", source, target[0])
+
+    def _store_field_record(
+        self,
+        side: int,
+        source: str,
+        line: int,
+        record: Any,
+        target: Tuple[bytes, int, bytes],
+    ) -> None:
+        if not isinstance(record, dict):
+            raise InputError("each record must be a JSON object", source, line)
+        identity, expected_length, expected_digest = target
+        normalized = _remove_ignored(record, self._ignore_tree)
+        canonical = _canonical(normalized)
+        if _fingerprint(canonical) != (expected_length, expected_digest):
+            raise InputError("source changed while generating field diff", source, line)
+        self._connection.execute(
+            "INSERT INTO field_records VALUES (?, ?, ?)",
+            (side, identity, canonical),
+        )
+
+    def _field_changes(self, change: Change) -> Iterator[Dict[str, Any]]:
+        identity = _canonical(list(change.key))
+        rows = self._connection.execute(
+            """
+            SELECT side, content
+            FROM field_records
+            WHERE identity = ?
+            ORDER BY side
+            """,
+            (identity,),
+        ).fetchall()
+        if len(rows) != 2 or rows[0][0] != 0 or rows[1][0] != 1:
+            raise RuntimeError("field diff records are unavailable")
+        old = _decode_json(rows[0][1].decode("utf-8"))
+        new = _decode_json(rows[1][1].decode("utf-8"))
+        yield from _structural_changes(old, new)
+
 
 def _configuration(
     key: Union[str, Sequence[str]],
@@ -646,7 +835,10 @@ def diff(
     return DiffResult(old, new, config)
 
 
-def _change_dict(change: Change) -> Dict[str, Any]:
+def _change_dict(
+    change: Change,
+    field_changes: Optional[Iterable[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     result = {
         "type": "change",
         "op": change.operation.value,
@@ -656,6 +848,8 @@ def _change_dict(change: Change) -> Dict[str, Any]:
         result["old_line"] = change.old_line
     if change.new_line is not None:
         result["new_line"] = change.new_line
+    if field_changes is not None:
+        result["changes"] = list(field_changes)
     return result
 
 
@@ -668,17 +862,30 @@ def _write_text(result: DiffResult) -> None:
     print("  modified:  {:,}".format(summary.modified))
 
 
-def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
+def _write_details(
+    result: DiffResult,
+    path: Union[str, os.PathLike],
+    field_diff: bool = False,
+) -> None:
+    if field_diff:
+        result._prepare_field_diff()
+
     def events() -> Iterator[Dict[str, Any]]:
-        yield {
+        metadata = {
             "type": "meta",
             "key": list(result.config.key),
             "ignore": list(result.config.ignore),
             "where": result.config.where,
             "duplicates": result.config.duplicates.value,
         }
+        if field_diff:
+            metadata["field_diff"] = True
+        yield metadata
         for change in result.changes():
-            yield _change_dict(change)
+            changes = None
+            if field_diff and change.operation == ChangeOperation.MODIFIED:
+                changes = result._field_changes(change)
+            yield _change_dict(change, changes)
         yield {
             "type": "summary",
             "equal": result.equal,
@@ -709,6 +916,7 @@ def _parser() -> argparse.ArgumentParser:
         default=DuplicatePolicy.ERROR.value,
     )
     parser.add_argument("--details", metavar="FILE")
+    parser.add_argument("--field-diff", action="store_true")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--max-temp", type=int)
     return parser
@@ -725,7 +933,7 @@ def _run_comparison(arguments: argparse.Namespace, old: Any, new: Any, keys: Tup
         max_temp=arguments.max_temp,
     ) as result:
         if arguments.details:
-            _write_details(result, arguments.details)
+            _write_details(result, arguments.details, arguments.field_diff)
         if not arguments.quiet:
             _write_text(result)
             sys.stdout.flush()
@@ -738,6 +946,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.old == "-" and arguments.new == "-":
         parser.error("OLD and NEW cannot both read from stdin")
+    if arguments.field_diff and not arguments.details:
+        parser.error("--field-diff requires --details FILE")
+    if arguments.field_diff and (arguments.old == "-" or arguments.new == "-"):
+        parser.error("--field-diff cannot be used with stdin")
     old = sys.stdin.buffer if arguments.old == "-" else arguments.old
     new = sys.stdin.buffer if arguments.new == "-" else arguments.new
     keys = tuple(name.strip() for item in arguments.key for name in item.split(","))

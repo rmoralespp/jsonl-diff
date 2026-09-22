@@ -9,8 +9,8 @@ and delegates source/compression handling.
 
 Each record is parsed and validated incrementally, normalized, and inserted
 into a private SQLite database under an operating-system temporary directory.
-The database stores the typed canonical identity, original line, content
-length, and SHA-256 digest; the full canonical bytes are not persisted. A
+The primary index stores the typed canonical identity, original line, content
+length, and SHA-256 digest; it does not retain the full canonical bytes. A
 uniqueness constraint detects duplicate identities. SQL joins calculate the
 summary, and ordered SQLite cursors drive lazy change iteration.
 
@@ -19,6 +19,15 @@ database buffers; it does not keep the complete decoded inputs or all changes
 in RAM. It does require temporary disk space. The identity, line, length, and
 digest index remains until the `DiffResult` is closed, so temporary usage
 scales with the number of records rather than the combined input size.
+
+With CLI `--field-diff`, the fingerprint pass remains unchanged. When
+modified identities exist, each source is read a second time. Target metadata
+and the normalized canonical bytes of modified records are retained in the
+disk-backed SQLite workspace; all other second-pass records are discarded.
+Structural comparison then runs one modified pair at a time, emitting RFC
+6901 JSON Pointers. This repeats input transfer and decompression where
+applicable. Sources must be readable a second time, so stdin is not supported
+in this mode.
 
 ## `max_temp` / `--max-temp`
 
@@ -29,12 +38,13 @@ raises `ResourceError` (CLI exit `2`) when the workspace is observed above the
 configured budget. Choose a limit with room for SQLite pages and index
 overhead.
 
-The filesystem-level check (stat-ing every workspace file) runs every 1024
-inserted records per side, plus once more after each side finishes, rather
-than after every record; this keeps large-input indexing fast. SQLite's own
-`max_page_count` (derived from `max_temp`) still rejects oversized writes to
-the main index immediately, but it does not account for every file in the
-workspace and the periodic filesystem check can observe growth between
+During primary indexing, the filesystem-level check (stat-ing every workspace
+file) runs periodically and once after each side finishes rather than after
+every record; this keeps large-input indexing fast. With `--field-diff`, it
+also runs after target metadata is stored and after each second-pass side.
+SQLite's own `max_page_count` (derived from `max_temp`) still rejects oversized
+writes to the main database immediately, but it does not account for every
+file in the workspace and the filesystem check can observe growth between
 checks.
 
 `py-jsonl` may create its own temporary staging files for remote or compressed

@@ -384,6 +384,162 @@ class TestDetailsOutput:
         # Assert
         assert records[1]["key"] == [12345678901234567890]
 
+    def test_field_diff_reports_nested_modified_values(self, write_jsonl, tmp_path, capsys):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{
+                "id": 123,
+                "name": "John",
+                "address": {"city": "Madrid"},
+                "status": "pending",
+            }],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{
+                "id": 123,
+                "name": "Jonathan",
+                "address": {"city": "Barcelona"},
+                "status": "approved",
+            }],
+        )
+        details = tmp_path / "changes.jsonl"
+
+        # Act
+        exit_code = main(
+            [
+                str(old),
+                str(new),
+                "--key",
+                "id",
+                "--details",
+                str(details),
+                "--field-diff",
+                "--quiet",
+            ],
+        )
+        records = [json.loads(line) for line in details.read_text(encoding="utf-8").splitlines()]
+        captured = capsys.readouterr()
+
+        # Assert
+        assert exit_code == 1
+        assert not captured.out
+        assert records[0]["field_diff"] is True
+        assert records[1]["changes"] == [
+            {"path": "/address/city", "old": "Madrid", "new": "Barcelona"},
+            {"path": "/name", "old": "John", "new": "Jonathan"},
+            {"path": "/status", "old": "pending", "new": "approved"},
+        ]
+
+    def test_field_diff_distinguishes_missing_nulls_and_escapes_paths(
+        self,
+        write_jsonl,
+        tmp_path,
+        capsys,
+    ):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "a/b": "old", "gone": None, "items": [1, 2]}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "a/b": "new", "added": None, "items": [1, 3, 4]}],
+        )
+        details = tmp_path / "changes.jsonl"
+
+        # Act
+        main(
+            [
+                str(old),
+                str(new),
+                "--key",
+                "id",
+                "--details",
+                str(details),
+                "--field-diff",
+                "--quiet",
+            ],
+        )
+        change = json.loads(details.read_text(encoding="utf-8").splitlines()[1])
+        capsys.readouterr()
+
+        # Assert
+        assert change["changes"] == [
+            {"path": "/a~1b", "old": "old", "new": "new"},
+            {"path": "/added", "new": None},
+            {"path": "/gone", "old": None},
+            {"path": "/items/1", "old": 2, "new": 3},
+            {"path": "/items/2", "new": 4},
+        ]
+
+    def test_field_diff_excludes_ignored_fields(self, write_jsonl, tmp_path, capsys):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "name": "old", "volatile": "old"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "name": "new", "volatile": "new"}])
+        details = tmp_path / "changes.jsonl"
+
+        # Act
+        main(
+            [
+                str(old),
+                str(new),
+                "--key",
+                "id",
+                "--ignore",
+                "/volatile",
+                "--details",
+                str(details),
+                "--field-diff",
+                "--quiet",
+            ],
+        )
+        change = json.loads(details.read_text(encoding="utf-8").splitlines()[1])
+        capsys.readouterr()
+
+        # Assert
+        assert change["changes"] == [{"path": "/name", "old": "old", "new": "new"}]
+
+
+class TestFieldDiffArguments:
+    def test_field_diff_requires_details(self, write_jsonl, capsys):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        with pytest.raises(SystemExit) as captured_exit:
+            main([str(old), str(new), "--key", "id", "--field-diff"])
+        captured = capsys.readouterr()
+
+        # Assert
+        assert captured_exit.value.code == 3
+        assert "--field-diff requires --details FILE" in captured.err
+
+    def test_field_diff_rejects_stdin_source(self, write_jsonl, tmp_path, capsys):
+        # Arrange
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        with pytest.raises(SystemExit) as captured_exit:
+            main(
+                [
+                    "-",
+                    str(new),
+                    "--key",
+                    "id",
+                    "--details",
+                    str(tmp_path / "changes.jsonl"),
+                    "--field-diff",
+                ],
+            )
+        captured = capsys.readouterr()
+
+        # Assert
+        assert captured_exit.value.code == 3
+        assert "--field-diff cannot be used with stdin" in captured.err
+
 
 class TestQuietOutput:
     def test_quiet_suppresses_summary_but_writes_details(self, write_jsonl, tmp_path, capsys):

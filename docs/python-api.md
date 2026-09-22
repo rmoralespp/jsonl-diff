@@ -51,6 +51,10 @@ its context fully reads, indexes, and validates both sources before exposing
 the result. `DiffResult.changes()` is then a lazy iterator over the disk-backed
 result rather than a list held in memory.
 
+Field-level expansion is currently a CLI report feature enabled by
+`--details FILE --field-diff`; the public Python API exposes record-level
+`Change` objects.
+
 Using `DiffResult` as a context manager is required. It owns the temporary
 resources and removes its private workspace on exit. A result cannot be entered
 more than once. Its summary becomes available after entering and remains

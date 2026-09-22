@@ -101,9 +101,10 @@ Records with the same identity are compared after ignored members are removed:
 Canonical content is reduced to its length and a SHA-256 digest before being
 stored; content is considered equal when both match. A length+SHA-256 match
 is treated as proof of equality (the same trade-off relied upon by tools such
-as `git` and `rsync`); the full canonical bytes are not retained for
-comparison. Numbers are written using compact scientific notation; a large
-exponent does not expand into a large string of zeroes.
+as `git` and `rsync`). The primary comparison does not retain full canonical
+bytes. The optional CLI `--field-diff` phase stores them only for records
+already classified as modified. Numbers are written using compact scientific
+notation; a large exponent does not expand into a large string of zeroes.
 
 ## Determinism
 
