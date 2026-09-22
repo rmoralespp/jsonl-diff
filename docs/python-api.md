@@ -61,12 +61,21 @@ available after closing; iterating changes requires the context to remain open.
 `result.summary` is an immutable `Summary`:
 
 ```python
-Summary(equal=10, added=2, deleted=1, modified=3)
+Summary(
+    equal=10,
+    added=2,
+    deleted=1,
+    modified=3,
+    old_duplicates=2,
+    new_duplicates=1,
+)
 ```
 
-It exposes integer fields `equal`, `added`, `deleted`, and `modified`, plus the
-boolean property `different`. The same values are available directly as
-read-only `DiffResult` properties.
+It exposes integer fields `equal`, `added`, `deleted`, `modified`,
+`old_duplicates`, and `new_duplicates`. `different` covers record
+reconciliation differences, `has_duplicates` covers uniqueness findings, and
+`has_issues` covers either. The same values and booleans are available directly
+as read-only `DiffResult` properties.
 
 Each item from `result.changes()` is an immutable `Change` with:
 
@@ -88,6 +97,27 @@ with diff("old.jsonl", "new.jsonl", key="id") as result:
     for change in added:
         print(change.key, change.new_line)
 ```
+
+With `duplicates="first"` or `"last"`, `result.duplicates()` lazily yields one
+immutable `Duplicate` per discarded occurrence. Each item exposes `key`,
+`source`, `selected` and `discarded` locations, `selected_line` and
+`discarded_line` conveniences, and `content_equal`. The equality flag compares
+canonical content after ignored fields are removed:
+
+```python
+with diff("old.jsonl", "new.jsonl", key="id", duplicates="first") as result:
+    for duplicate in result.duplicates():
+        print(
+            duplicate.source,
+            duplicate.key,
+            duplicate.selected_line,
+            duplicate.discarded_line,
+            duplicate.content_equal,
+        )
+```
+
+Duplicate iteration, like change iteration, requires the context to remain
+open. Summary duplicate counts remain available after closing.
 
 With numeric keys, API key components are `decimal.Decimal` values. For
 example, JSON identity `7` is returned as `Decimal("7")`; JSON strings and

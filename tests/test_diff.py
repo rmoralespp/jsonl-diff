@@ -568,8 +568,14 @@ class TestInputValidation:
     @pytest.mark.parametrize(
         "policy,expected",
         [
-            (DuplicatePolicy.FIRST, Summary(equal=1, added=0, deleted=0, modified=0)),
-            (DuplicatePolicy.LAST, Summary(equal=0, added=0, deleted=0, modified=1)),
+            (
+                DuplicatePolicy.FIRST,
+                Summary(equal=1, added=0, deleted=0, modified=0, old_duplicates=1),
+            ),
+            (
+                DuplicatePolicy.LAST,
+                Summary(equal=0, added=0, deleted=0, modified=1, old_duplicates=1),
+            ),
         ],
     )
     def test_duplicate_policy_selects_record(self, write_jsonl, policy, expected):
@@ -586,6 +592,94 @@ class TestInputValidation:
 
         # Assert
         assert summary == expected
+
+    @pytest.mark.parametrize(
+        "policy,selected_line,discarded",
+        [
+            (DuplicatePolicy.FIRST, 1, [(2, False), (3, True)]),
+            (DuplicatePolicy.LAST, 3, [(1, True), (2, False)]),
+        ],
+    )
+    def test_tolerated_duplicates_report_selected_and_discarded_occurrences(
+        self,
+        write_jsonl,
+        policy,
+        selected_line,
+        discarded,
+    ):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [
+                {"id": 1, "value": "selected"},
+                {"id": 1, "value": "conflicting"},
+                {"id": 1, "value": "selected"},
+            ],
+        )
+        new = write_jsonl("new.jsonl", [{"id": 1, "value": "selected"}])
+
+        # Act
+        with diff(old, new, key="id", duplicates=policy) as result:
+            summary = result.summary
+            duplicates = list(result.duplicates())
+
+        # Assert
+        assert summary == Summary(
+            equal=1,
+            added=0,
+            deleted=0,
+            modified=0,
+            old_duplicates=2,
+        )
+        assert summary.different is False
+        assert summary.has_duplicates is True
+        assert summary.has_issues is True
+        assert [
+            (
+                duplicate.source,
+                duplicate.key,
+                duplicate.selected_line,
+                duplicate.discarded_line,
+                duplicate.content_equal,
+            )
+            for duplicate in duplicates
+        ] == [
+            ("OLD", (Decimal("1"),), selected_line, line, content_equal)
+            for line, content_equal in discarded
+        ]
+
+    def test_duplicate_counts_are_extra_occurrences_on_each_side(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}, {"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}, {"id": 1}, {"id": 1}])
+
+        # Act
+        with diff(old, new, key="id", duplicates="first") as result:
+            summary = result.summary
+            sources = [duplicate.source for duplicate in result.duplicates()]
+
+        # Assert
+        assert summary.old_duplicates == 1
+        assert summary.new_duplicates == 2
+        assert sources == ["OLD", "NEW", "NEW"]
+
+    def test_duplicate_content_equality_uses_ignored_content(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [
+                {"id": 1, "value": "same", "metadata": "first"},
+                {"id": 1, "value": "same", "metadata": "last"},
+            ],
+        )
+        new = write_jsonl("new.jsonl", [{"id": 1, "value": "same"}])
+
+        # Act
+        with diff(old, new, key="id", ignore=("/metadata",), duplicates="first") as result:
+            duplicate = next(result.duplicates())
+
+        # Assert
+        assert duplicate.content_equal is True
 
     def test_invalid_duplicate_policy_is_rejected(self, write_jsonl):
         # Arrange

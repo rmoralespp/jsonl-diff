@@ -99,11 +99,23 @@ class Summary:
     added: int
     deleted: int
     modified: int
+    old_duplicates: int = 0
+    new_duplicates: int = 0
 
     @property
     def different(self) -> bool:
         """Return whether any changed records were found."""
         return bool(self.added or self.deleted or self.modified)
+
+    @property
+    def has_duplicates(self) -> bool:
+        """Return whether either source contained duplicate identities."""
+        return bool(self.old_duplicates or self.new_duplicates)
+
+    @property
+    def has_issues(self) -> bool:
+        """Return whether changes or tolerated duplicate identities were found."""
+        return self.different or self.has_duplicates
 
 
 @dataclass(frozen=True)
@@ -136,6 +148,31 @@ class Change:
     def new_line(self) -> Optional[int]:
         """Return the NEW physical line, when present."""
         return None if self.new is None else self.new.line
+
+
+@dataclass(frozen=True)
+class Duplicate:
+    """One occurrence discarded by a tolerant duplicate policy."""
+
+    key: IdentityKey
+    selected: SourceLocation
+    discarded: SourceLocation
+    content_equal: bool
+
+    @property
+    def source(self) -> str:
+        """Return the source containing the duplicate identity."""
+        return self.selected.source
+
+    @property
+    def selected_line(self) -> int:
+        """Return the physical line selected by the duplicate policy."""
+        return self.selected.line
+
+    @property
+    def discarded_line(self) -> int:
+        """Return the physical line discarded by the duplicate policy."""
+        return self.discarded.line
 
 
 def _reject_constant(value: str) -> None:
@@ -362,6 +399,18 @@ class DiffResult:
             ) WITHOUT ROWID
             """,
         )
+        self._connection.execute(
+            """
+            CREATE TABLE duplicate_records (
+                side INTEGER NOT NULL,
+                identity BLOB NOT NULL,
+                line INTEGER NOT NULL,
+                length INTEGER NOT NULL,
+                digest BLOB NOT NULL,
+                PRIMARY KEY (side, identity, line)
+            ) WITHOUT ROWID
+            """,
+        )
 
     def _require_summary(self) -> Summary:
         if self._summary_value is None:
@@ -390,8 +439,24 @@ class DiffResult:
         return self._require_summary().modified
 
     @property
+    def old_duplicates(self) -> int:
+        return self._require_summary().old_duplicates
+
+    @property
+    def new_duplicates(self) -> int:
+        return self._require_summary().new_duplicates
+
+    @property
     def different(self) -> bool:
         return self._require_summary().different
+
+    @property
+    def has_duplicates(self) -> bool:
+        return self._require_summary().has_duplicates
+
+    @property
+    def has_issues(self) -> bool:
+        return self._require_summary().has_issues
 
     def changes(self, operation: Optional[ChangeOperation] = None) -> Iterator[Change]:
         """Iterate changed identities in deterministic order."""
@@ -434,6 +499,33 @@ class DiffResult:
                 new_record = next(new_records, None)
             if change is not None and (requested is None or change.operation == requested):
                 yield change
+
+    def duplicates(self) -> Iterator[Duplicate]:
+        """Iterate discarded duplicate occurrences in deterministic order."""
+        if self._connection is None:
+            raise RuntimeError("the diff result is closed")
+        rows = self._connection.execute(
+            """
+            SELECT
+                d.side,
+                d.identity,
+                r.line,
+                d.line,
+                d.length = r.length AND d.digest = r.digest
+            FROM duplicate_records AS d
+            JOIN records AS r USING (side, identity)
+            ORDER BY d.side, d.identity, d.line
+            """,
+        )
+        for side, identity, selected_line, discarded_line, content_equal in rows:
+            source = "OLD" if side == 0 else "NEW"
+            key = tuple(_decode_json(identity.decode("utf-8")))
+            yield Duplicate(
+                key,
+                SourceLocation(source, selected_line),
+                SourceLocation(source, discarded_line),
+                bool(content_equal),
+            )
 
     def _change(
         self,
@@ -490,13 +582,44 @@ class DiffResult:
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
         self.close()
 
+    def _insert_tolerated_record(
+        self,
+        cursor: sqlite3.Cursor,
+        values: Tuple[Any, ...],
+    ) -> None:
+        cursor.execute(
+            "INSERT OR IGNORE INTO records VALUES (?, ?, ?, ?, ?)",
+            values,
+        )
+        if cursor.rowcount != 0:
+            return
+        side, identity, line, length, digest = values
+        if self.config.duplicates == DuplicatePolicy.FIRST:
+            cursor.execute(
+                "INSERT INTO duplicate_records VALUES (?, ?, ?, ?, ?)",
+                values,
+            )
+            return
+        cursor.execute(
+            """
+            INSERT INTO duplicate_records
+            SELECT side, identity, line, length, digest
+            FROM records
+            WHERE side = ? AND identity = ?
+            """,
+            (side, identity),
+        )
+        cursor.execute(
+            """
+            UPDATE records
+            SET line = ?, length = ?, digest = ?
+            WHERE side = ? AND identity = ?
+            """,
+            (line, length, digest, side, identity),
+        )
+
     def _insert_records(self, records: Iterable[Any], side: int, source: str) -> None:
         cursor = self._connection.cursor()
-        insert = {
-            DuplicatePolicy.ERROR: "INSERT",
-            DuplicatePolicy.FIRST: "INSERT OR IGNORE",
-            DuplicatePolicy.LAST: "INSERT OR REPLACE",
-        }[self.config.duplicates]
         for line, record in enumerate(records, start=1):
             if not isinstance(record, dict):
                 raise InputError("each record must be a JSON object", source, line)
@@ -515,25 +638,23 @@ class DiffResult:
                 length, digest = _fingerprint(canonical)
             except (TypeError, ValueError) as error:
                 raise InputError(str(error), source, line) from error
-            try:
-                cursor.execute(
-                    "{} INTO records VALUES (?, ?, ?, ?, ?)".format(insert),
-                    (
-                        side,
-                        identity,
-                        line,
-                        length,
-                        digest,
-                    ),
-                )
-            except sqlite3.IntegrityError as error:
-                first = cursor.execute(
-                    "SELECT line FROM records WHERE side = ? AND identity = ?",
-                    (side, identity),
-                ).fetchone()[0]
-                raise DuplicateKeyError(key, source, (first, line)) from error
-            except sqlite3.DatabaseError as error:
-                raise ResourceError("could not write the temporary index") from error
+            values = (side, identity, line, length, digest)
+            if self.config.duplicates == DuplicatePolicy.ERROR:
+                try:
+                    cursor.execute("INSERT INTO records VALUES (?, ?, ?, ?, ?)", values)
+                except sqlite3.IntegrityError as error:
+                    first = cursor.execute(
+                        "SELECT line FROM records WHERE side = ? AND identity = ?",
+                        (side, identity),
+                    ).fetchone()[0]
+                    raise DuplicateKeyError(key, source, (first, line)) from error
+                except sqlite3.DatabaseError as error:
+                    raise ResourceError("could not write the temporary index") from error
+            else:
+                try:
+                    self._insert_tolerated_record(cursor, values)
+                except sqlite3.DatabaseError as error:
+                    raise ResourceError("could not write the temporary index") from error
             if self.config.max_temp is not None and line % _SIZE_CHECK_INTERVAL == 0:
                 self._check_size()
         self._check_size()
@@ -597,7 +718,13 @@ class DiffResult:
                    AND (
                        o.length != n.length
                        OR o.digest != n.digest
-                   ))
+                   )),
+                (SELECT COUNT(*)
+                 FROM duplicate_records
+                 WHERE side = 0),
+                (SELECT COUNT(*)
+                 FROM duplicate_records
+                 WHERE side = 1)
             """,
         ).fetchone()
         return Summary(*(int(value or 0) for value in row))
@@ -659,6 +786,17 @@ def _change_dict(change: Change) -> Dict[str, Any]:
     return result
 
 
+def _duplicate_dict(duplicate: Duplicate) -> Dict[str, Any]:
+    return {
+        "type": "duplicate",
+        "source": duplicate.source,
+        "key": list(duplicate.key),
+        "selected_line": duplicate.selected_line,
+        "discarded_line": duplicate.discarded_line,
+        "content_equal": duplicate.content_equal,
+    }
+
+
 def _write_text(result: DiffResult) -> None:
     summary = result.summary
     print("Records:")
@@ -666,6 +804,8 @@ def _write_text(result: DiffResult) -> None:
     print("  added:     {:,}".format(summary.added))
     print("  deleted:   {:,}".format(summary.deleted))
     print("  modified:  {:,}".format(summary.modified))
+    print("  OLD duplicates:  {:,}".format(summary.old_duplicates))
+    print("  NEW duplicates:  {:,}".format(summary.new_duplicates))
 
 
 def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
@@ -677,6 +817,8 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
             "where": result.config.where,
             "duplicates": result.config.duplicates.value,
         }
+        for duplicate in result.duplicates():
+            yield _duplicate_dict(duplicate)
         for change in result.changes():
             yield _change_dict(change)
         yield {
@@ -685,6 +827,8 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
             "added": result.added,
             "deleted": result.deleted,
             "modified": result.modified,
+            "old_duplicates": result.old_duplicates,
+            "new_duplicates": result.new_duplicates,
         }
 
     jsonl.dump(events(), path, cls=_canonical_text)
@@ -729,7 +873,7 @@ def _run_comparison(arguments: argparse.Namespace, old: Any, new: Any, keys: Tup
         if not arguments.quiet:
             _write_text(result)
             sys.stdout.flush()
-        return 1 if result.different else 0
+        return 1 if result.has_issues else 0
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:

@@ -46,6 +46,14 @@ first occurrence and repeated physical line. Set `duplicates="first"` to keep
 the first occurrence or `duplicates="last"` to keep the last occurrence and
 its physical line. These tolerant policies depend on physical input order.
 
+Tolerated duplicates remain data-quality findings. They do not abort indexing,
+but each discarded occurrence is counted separately for OLD and NEW, exposed
+through `DiffResult.duplicates()`, and causes CLI exit code `1`. Counts use
+additional-occurrence semantics: if one identity occurs three times, one
+occurrence is selected and two are counted as duplicates. Duplicate
+diagnostics also indicate whether the discarded and selected canonical
+contents are equal after applying `--ignore`.
+
 ## Ignored object members
 
 Ignore expressions are exact
@@ -66,7 +74,8 @@ against each raw record as it is parsed, before identity extraction, before
 expression evaluates to a truthy value participate in the comparison; the
 rest are skipped as if they were absent from that source. Skipped records are
 never indexed, so they cannot be reported as `added`, `deleted`, or
-`modified`, and they never trigger duplicate-key detection.
+`modified`, and they never trigger duplicate-key detection or contribute to
+duplicate counts.
 
 `--key`, `--where`, and `--ignore` have distinct, non-overlapping
 responsibilities: `--key` defines identity, `--where` defines which records
