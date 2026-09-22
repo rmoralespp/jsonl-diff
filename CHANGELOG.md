@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Added:** `--schema-diff` and `schema_diff=True` compare disk-backed observed
+  field profiles, reporting added/removed fields and changes in types,
+  nullability, and requiredness. `--schema-ignore` provides independent RFC
+  6901 exclusions for schema profiling.
 - **Added:** Tolerated duplicate identities are counted per source and exposed
   as deterministic API and `--details` diagnostics with selected/discarded
   physical lines and canonical-content equality.

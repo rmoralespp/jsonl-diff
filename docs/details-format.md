@@ -25,7 +25,15 @@ containing changed identity `2` and added identity `3`, the file is:
 - **`meta`**: always first. `key` contains normalized identity-field names;
   `ignore` contains the configured ignore pointers; `where` contains the
   configured JMESPath expression, or `null` when `--where` was not used;
-  `duplicates` records the duplicate policy once for the whole report.
+  `duplicates` records the duplicate policy once for the whole report. With
+  `--schema-diff`, it also contains `schema_diff: true` and the normalized
+  `schema_ignore` pointers.
+- **`schema_change`**: emitted only with `--schema-diff`, ordered by RFC 6901
+  path and operation before duplicate and record changes. `op` is
+  `field_added`, `field_removed`, `types_changed`, `nullability_changed`, or
+  `requiredness_changed`. Available `old` and `new` profiles contain
+  `parent_objects`, `present`, `missing`, `nulls`, and non-null `types`
+  frequencies.
 - **`duplicate`**: one per occurrence discarded by `first` or `last`, ordered
   by source, identity, and discarded line. `source` is `OLD` or `NEW`;
   `selected_line` is the occurrence retained by the policy and
@@ -39,7 +47,8 @@ containing changed identity `2` and added identity `3`, the file is:
 - **`summary`**: always last after a successful write, with the four
   reconciliation totals plus `old_duplicates` and `new_duplicates`. Duplicate
   totals count additional occurrences, so an identity appearing three times
-  contributes two.
+  contributes two. With schema diff enabled, a nested `schema` object contains
+  the five schema-change totals.
 
 Duplicate events follow `meta` and precede `change` events:
 
@@ -48,6 +57,15 @@ Duplicate events follow `meta` and precede `change` events:
 {"content_equal":true,"discarded_line":2,"key":[1],"selected_line":1,"source":"OLD","type":"duplicate"}
 {"content_equal":false,"discarded_line":3,"key":[1],"selected_line":1,"source":"OLD","type":"duplicate"}
 {"added":0,"deleted":0,"equal":1,"modified":0,"new_duplicates":0,"old_duplicates":2,"type":"summary"}
+```
+
+Schema events precede duplicate and record changes:
+
+```jsonl
+{"duplicates":"error","ignore":[],"key":["id"],"schema_diff":true,"schema_ignore":[],"type":"meta","where":null}
+{"new":{"missing":0,"nulls":0,"parent_objects":2,"present":2,"types":{"string":2}},"old":{"missing":0,"nulls":0,"parent_objects":2,"present":2,"types":{"integer":2}},"op":"types_changed","path":"/age","type":"schema_change"}
+{"new":{"missing":0,"nulls":0,"parent_objects":2,"present":2,"types":{"string":2}},"op":"field_added","path":"/country","type":"schema_change"}
+{"added":0,"deleted":0,"equal":0,"modified":2,"new_duplicates":0,"old_duplicates":0,"schema":{"fields_added":1,"fields_removed":0,"nullability_changed":0,"requiredness_changed":0,"types_changed":1},"type":"summary"}
 ```
 
 ## Notes

@@ -24,6 +24,26 @@ scales with the number of selected records plus tolerated duplicate
 occurrences rather than the combined input size. Duplicate diagnostics compare
 stored fingerprints and do not require retaining or rereading full records.
 
+## Observed-schema profile
+
+When `schema_diff=True` / `--schema-diff` is enabled, indexing also builds an
+observed-schema profile in the same SQLite workspace. The profile stores one
+aggregate row per source and RFC 6901 field path, plus object-occurrence counts
+used to distinguish a missing field from an explicit `null`.
+
+Per-record observations are accumulated in small Python dictionaries and
+flushed to SQLite every 1024 physical lines. SQLite upserts add the batch
+counts, so profiling does not perform one database write for every field in
+every record. Memory scales with the distinct paths in the current batch and
+record; disk usage scales with distinct observed paths rather than the number
+of records. Datasets with dynamic property names can still create large
+profiles, and those tables count toward `max_temp`.
+
+Schema profiling happens during the original input pass and does not retain
+complete records or reread a source. It therefore works with stdin, remote,
+and compressed sources. Nested objects are traversed iteratively. Arrays are
+profiled as terminal `array` values; their elements are not inferred.
+
 ## `max_temp` / `--max-temp`
 
 `max_temp` / `--max-temp` accepts a positive byte count and acts as a

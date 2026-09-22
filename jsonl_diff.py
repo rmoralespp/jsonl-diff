@@ -27,6 +27,14 @@ _MISSING = object()
 # Avoid per-record filesystem scans: SQLite already enforces the main size limit.
 # Check periodically and once after each side finishes to catch extra temp/journal growth.
 _SIZE_CHECK_INTERVAL = 1024
+_SCHEMA_TYPE_INDEXES = {
+    "boolean": 3,
+    "integer": 4,
+    "number": 5,
+    "string": 6,
+    "object": 7,
+    "array": 8,
+}
 
 
 class JsonlDiffError(Exception):
@@ -83,12 +91,103 @@ class DuplicatePolicy(str, Enum):
     LAST = "last"
 
 
+class SchemaChangeOperation(str, Enum):
+    """An observed schema change classification."""
+
+    FIELD_ADDED = "field_added"
+    FIELD_REMOVED = "field_removed"
+    TYPES_CHANGED = "types_changed"
+    NULLABILITY_CHANGED = "nullability_changed"
+    REQUIREDNESS_CHANGED = "requiredness_changed"
+
+
 @dataclass(frozen=True)
 class SourceLocation:
     """A physical source location."""
 
     source: str
     line: int
+
+
+@dataclass(frozen=True)
+class SchemaFieldProfile:
+    """Observed statistics for one object field."""
+
+    path: str
+    parent_objects: int
+    present: int
+    nulls: int
+    boolean_count: int
+    integer_count: int
+    number_count: int
+    string_count: int
+    object_count: int
+    array_count: int
+
+    @property
+    def missing(self) -> int:
+        """Return the number of parent objects without this field."""
+        return self.parent_objects - self.present
+
+    @property
+    def nullable(self) -> bool:
+        """Return whether an explicit null was observed."""
+        return bool(self.nulls)
+
+    @property
+    def required(self) -> bool:
+        """Return whether the field was present in every observed parent object."""
+        return self.present == self.parent_objects
+
+    @property
+    def type_counts(self) -> Dict[str, int]:
+        """Return observed non-null JSON types and their frequencies."""
+        counts = (
+            ("boolean", self.boolean_count),
+            ("integer", self.integer_count),
+            ("number", self.number_count),
+            ("string", self.string_count),
+            ("object", self.object_count),
+            ("array", self.array_count),
+        )
+        return {name: count for name, count in counts if count}
+
+    @property
+    def types(self) -> Tuple[str, ...]:
+        """Return observed non-null JSON types in stable order."""
+        return tuple(self.type_counts)
+
+
+@dataclass(frozen=True)
+class SchemaChange:
+    """One observed field, type, nullability, or requiredness change."""
+
+    operation: SchemaChangeOperation
+    path: str
+    old: Optional[SchemaFieldProfile]
+    new: Optional[SchemaFieldProfile]
+
+
+@dataclass(frozen=True)
+class SchemaSummary:
+    """Observed schema change totals."""
+
+    fields_added: int = 0
+    fields_removed: int = 0
+    types_changed: int = 0
+    nullability_changed: int = 0
+    requiredness_changed: int = 0
+
+    @property
+    def different(self) -> bool:
+        """Return whether any observed schema changes were found."""
+        return bool(
+            self.fields_added
+            or self.fields_removed
+            or self.types_changed
+            or self.nullability_changed
+            or self.requiredness_changed,
+        )
 
 
 @dataclass(frozen=True)
@@ -101,6 +200,7 @@ class Summary:
     modified: int
     old_duplicates: int = 0
     new_duplicates: int = 0
+    schema: Optional[SchemaSummary] = None
 
     @property
     def different(self) -> bool:
@@ -113,9 +213,14 @@ class Summary:
         return bool(self.old_duplicates or self.new_duplicates)
 
     @property
+    def has_schema_changes(self) -> bool:
+        """Return whether observed schema changes were found."""
+        return self.schema is not None and self.schema.different
+
+    @property
     def has_issues(self) -> bool:
-        """Return whether changes or tolerated duplicate identities were found."""
-        return self.different or self.has_duplicates
+        """Return whether record, duplicate, or observed schema issues were found."""
+        return self.different or self.has_duplicates or self.has_schema_changes
 
 
 @dataclass(frozen=True)
@@ -128,6 +233,8 @@ class DiffConfig:
     duplicates: DuplicatePolicy = DuplicatePolicy.ERROR
     max_temp: Optional[int] = None
     where_expression: Any = None
+    schema_diff: bool = False
+    schema_ignore: Tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -280,6 +387,59 @@ def _fingerprint(canonical: bytes) -> Tuple[int, bytes]:
     return len(canonical), hashlib.sha256(canonical).digest()
 
 
+def _pointer_child(path: str, token: str) -> str:
+    escaped = token.replace("~", "~0").replace("/", "~1")
+    return "{}/{}".format(path, escaped)
+
+
+def _schema_type(value: Any) -> str:
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, dict):
+        return "object"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, Decimal):
+        return "integer" if value == value.to_integral_value() else "number"
+    if isinstance(value, int):
+        return "integer"
+    if isinstance(value, float):
+        return "integer" if value.is_integer() else "number"
+    raise ValueError("unsupported JSON value type: {}".format(type(value).__name__))
+
+
+def _profile_schema(
+    record: Dict[str, Any],
+    ignore_tree: Dict[str, Any],
+    fields: Dict[str, Any],
+    objects: Dict[str, int],
+) -> None:
+    stack = [("", record, ignore_tree)]
+    while stack:
+        path, value, tree = stack.pop()
+        objects[path] = objects.get(path, 0) + 1
+        for name, item in value.items():
+            child_tree = tree.get(name)
+            if child_tree is not None and _MISSING in child_tree:
+                continue
+            if child_tree and isinstance(item, list):
+                raise ValueError("schema ignore paths may not traverse arrays")
+            child_path = _pointer_child(path, name)
+            counts = fields.get(child_path)
+            if counts is None:
+                counts = [path, 0, 0, 0, 0, 0, 0, 0, 0]
+                fields[child_path] = counts
+            counts[1] += 1
+            if item is None:
+                counts[2] += 1
+            else:
+                counts[_SCHEMA_TYPE_INDEXES[_schema_type(item)]] += 1
+            if isinstance(item, dict):
+                stack.append((child_path, item, child_tree or {}))
+
+
 def _parse_pointer(pointer: str) -> Tuple[str, ...]:
     if not pointer.startswith("/") or pointer == "/":
         if pointer == "/":
@@ -380,6 +540,7 @@ class DiffResult:
         self._new = new
         self.config = config
         self._ignore_tree = _ignore_tree(config.ignore, config.key)
+        self._schema_ignore_tree = _ignore_tree(config.schema_ignore, ())
         # Compiled during configuration validation and reused for every record;
         # never compile inside the per-record processing loop.
         self._where = config.where_expression
@@ -419,6 +580,35 @@ class DiffResult:
             ) WITHOUT ROWID
             """,
         )
+        if self.config.schema_diff:
+            self._connection.execute(
+                """
+                CREATE TABLE schema_fields (
+                    side INTEGER NOT NULL,
+                    path TEXT NOT NULL,
+                    parent_path TEXT NOT NULL,
+                    present INTEGER NOT NULL,
+                    nulls INTEGER NOT NULL,
+                    booleans INTEGER NOT NULL,
+                    integers INTEGER NOT NULL,
+                    numbers INTEGER NOT NULL,
+                    strings INTEGER NOT NULL,
+                    objects INTEGER NOT NULL,
+                    arrays INTEGER NOT NULL,
+                    PRIMARY KEY (side, path)
+                ) WITHOUT ROWID
+                """,
+            )
+            self._connection.execute(
+                """
+                CREATE TABLE schema_objects (
+                    side INTEGER NOT NULL,
+                    path TEXT NOT NULL,
+                    occurrences INTEGER NOT NULL,
+                    PRIMARY KEY (side, path)
+                ) WITHOUT ROWID
+                """,
+            )
         self._connection.execute(
             """
             CREATE TABLE duplicate_records (
@@ -475,6 +665,14 @@ class DiffResult:
         return self._require_summary().has_duplicates
 
     @property
+    def schema_summary(self) -> Optional[SchemaSummary]:
+        return self._require_summary().schema
+
+    @property
+    def has_schema_changes(self) -> bool:
+        return self._require_summary().has_schema_changes
+
+    @property
     def has_issues(self) -> bool:
         return self._require_summary().has_issues
 
@@ -519,6 +717,93 @@ class DiffResult:
                 new_record = next(new_records, None)
             if change is not None and (requested is None or change.operation == requested):
                 yield change
+
+    def schema_changes(
+        self,
+        operation: Optional[SchemaChangeOperation] = None,
+    ) -> Iterator[SchemaChange]:
+        """Iterate observed schema changes in deterministic order."""
+        if self._connection is None:
+            raise RuntimeError("the diff result is closed")
+        if not self.config.schema_diff:
+            raise RuntimeError("schema diff was not enabled")
+        requested = None if operation is None else SchemaChangeOperation(operation)
+        old_profiles = iter(self._schema_profiles(0))
+        new_profiles = iter(self._schema_profiles(1))
+        old_profile = next(old_profiles, None)
+        new_profile = next(new_profiles, None)
+        while old_profile is not None or new_profile is not None:
+            comparison = (
+                1
+                if old_profile is None
+                else -1
+                if new_profile is None
+                else (old_profile.path > new_profile.path) - (old_profile.path < new_profile.path)
+            )
+            if comparison < 0:
+                changes = (
+                    SchemaChange(
+                        SchemaChangeOperation.FIELD_REMOVED,
+                        old_profile.path,
+                        old_profile,
+                        None,
+                    ),
+                )
+                old_profile = next(old_profiles, None)
+            elif comparison > 0:
+                changes = (
+                    SchemaChange(
+                        SchemaChangeOperation.FIELD_ADDED,
+                        new_profile.path,
+                        None,
+                        new_profile,
+                    ),
+                )
+                new_profile = next(new_profiles, None)
+            else:
+                changes = tuple(self._changed_schema_dimensions(old_profile, new_profile))
+                old_profile = next(old_profiles, None)
+                new_profile = next(new_profiles, None)
+            for change in changes:
+                if requested is None or change.operation == requested:
+                    yield change
+
+    def _schema_profiles(self, side: int) -> Iterator[SchemaFieldProfile]:
+        rows = self._connection.execute(
+            """
+            SELECT
+                f.path,
+                p.occurrences,
+                f.present,
+                f.nulls,
+                f.booleans,
+                f.integers,
+                f.numbers,
+                f.strings,
+                f.objects,
+                f.arrays
+            FROM schema_fields AS f
+            JOIN schema_objects AS p
+              ON p.side = f.side AND p.path = f.parent_path
+            WHERE f.side = ?
+            ORDER BY f.path
+            """,
+            (side,),
+        )
+        for row in rows:
+            yield SchemaFieldProfile(row[0], *(int(value) for value in row[1:]))
+
+    @staticmethod
+    def _changed_schema_dimensions(
+        old: SchemaFieldProfile,
+        new: SchemaFieldProfile,
+    ) -> Iterator[SchemaChange]:
+        if old.types != new.types:
+            yield SchemaChange(SchemaChangeOperation.TYPES_CHANGED, old.path, old, new)
+        if old.nullable != new.nullable:
+            yield SchemaChange(SchemaChangeOperation.NULLABILITY_CHANGED, old.path, old, new)
+        if old.required != new.required:
+            yield SchemaChange(SchemaChangeOperation.REQUIREDNESS_CHANGED, old.path, old, new)
 
     def duplicates(self) -> Iterator[Duplicate]:
         """Iterate discarded duplicate occurrences in deterministic order."""
@@ -640,6 +925,8 @@ class DiffResult:
 
     def _insert_records(self, records: Iterable[Any], side: int, source: str) -> None:
         cursor = self._connection.cursor()
+        schema_fields = {}
+        schema_objects = {}
         for line, record in enumerate(records, start=1):
             if not isinstance(record, dict):
                 raise InputError("each record must be a JSON object", source, line)
@@ -649,6 +936,18 @@ class DiffResult:
                 except (TypeError, ValueError) as error:
                     raise InputError(str(error), source, line) from error
                 if not matched:
+                    if (
+                        self.config.schema_diff or self.config.max_temp is not None
+                    ) and line % _SIZE_CHECK_INTERVAL == 0:
+                        if self.config.schema_diff:
+                            self._flush_schema_profile(
+                                cursor,
+                                side,
+                                schema_fields,
+                                schema_objects,
+                            )
+                        if self.config.max_temp is not None:
+                            self._check_size()
                     continue
             try:
                 key = _identity(record, self.config.key)
@@ -658,6 +957,16 @@ class DiffResult:
                 length, digest = _fingerprint(canonical)
             except (TypeError, ValueError) as error:
                 raise InputError(str(error), source, line) from error
+            if self.config.schema_diff:
+                try:
+                    _profile_schema(
+                        record,
+                        self._schema_ignore_tree,
+                        schema_fields,
+                        schema_objects,
+                    )
+                except (TypeError, ValueError) as error:
+                    raise InputError(str(error), source, line) from error
             values = (side, identity, line, length, digest)
             if self.config.duplicates == DuplicatePolicy.ERROR:
                 try:
@@ -675,9 +984,54 @@ class DiffResult:
                     self._insert_tolerated_record(cursor, values)
                 except sqlite3.DatabaseError as error:
                     raise ResourceError("could not write the temporary index") from error
-            if self.config.max_temp is not None and line % _SIZE_CHECK_INTERVAL == 0:
-                self._check_size()
+            if (
+                self.config.schema_diff or self.config.max_temp is not None
+            ) and line % _SIZE_CHECK_INTERVAL == 0:
+                if self.config.schema_diff:
+                    self._flush_schema_profile(cursor, side, schema_fields, schema_objects)
+                if self.config.max_temp is not None:
+                    self._check_size()
+        if self.config.schema_diff:
+            self._flush_schema_profile(cursor, side, schema_fields, schema_objects)
         self._check_size()
+
+    @staticmethod
+    def _flush_schema_profile(
+        cursor: sqlite3.Cursor,
+        side: int,
+        fields: Dict[str, Any],
+        objects: Dict[str, int],
+    ) -> None:
+        if objects:
+            cursor.executemany(
+                """
+                INSERT INTO schema_objects VALUES (?, ?, ?)
+                ON CONFLICT(side, path) DO UPDATE SET
+                    occurrences = schema_objects.occurrences + excluded.occurrences
+                """,
+                ((side, path, count) for path, count in objects.items()),
+            )
+            objects.clear()
+        if fields:
+            cursor.executemany(
+                """
+                INSERT INTO schema_fields VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(side, path) DO UPDATE SET
+                    present = schema_fields.present + excluded.present,
+                    nulls = schema_fields.nulls + excluded.nulls,
+                    booleans = schema_fields.booleans + excluded.booleans,
+                    integers = schema_fields.integers + excluded.integers,
+                    numbers = schema_fields.numbers + excluded.numbers,
+                    strings = schema_fields.strings + excluded.strings,
+                    objects = schema_fields.objects + excluded.objects,
+                    arrays = schema_fields.arrays + excluded.arrays
+                """,
+                (
+                    (side, path, counts[0], *counts[1:])
+                    for path, counts in fields.items()
+                ),
+            )
+            fields.clear()
 
     def _index(self, source: Any, side: int) -> None:
         name = "OLD" if side == 0 else "NEW"
@@ -747,7 +1101,20 @@ class DiffResult:
                  WHERE side = 1)
             """,
         ).fetchone()
-        return Summary(*(int(value or 0) for value in row))
+        schema = self._calculate_schema_summary() if self.config.schema_diff else None
+        return Summary(*(int(value or 0) for value in row), schema=schema)
+
+    def _calculate_schema_summary(self) -> SchemaSummary:
+        counts = dict.fromkeys(SchemaChangeOperation, 0)
+        for change in self.schema_changes():
+            counts[change.operation] += 1
+        return SchemaSummary(
+            fields_added=counts[SchemaChangeOperation.FIELD_ADDED],
+            fields_removed=counts[SchemaChangeOperation.FIELD_REMOVED],
+            types_changed=counts[SchemaChangeOperation.TYPES_CHANGED],
+            nullability_changed=counts[SchemaChangeOperation.NULLABILITY_CHANGED],
+            requiredness_changed=counts[SchemaChangeOperation.REQUIREDNESS_CHANGED],
+        )
 
 
 def _configuration(
@@ -756,6 +1123,8 @@ def _configuration(
     where: Optional[str],
     duplicates: Union[str, DuplicatePolicy],
     max_temp: Optional[int],
+    schema_diff: bool,
+    schema_ignore: Sequence[str],
 ) -> DiffConfig:
     keys = (key,) if isinstance(key, str) else tuple(key)
     if not keys or any(not isinstance(name, str) or not name for name in keys):
@@ -765,6 +1134,10 @@ def _configuration(
     keys = tuple(sorted(keys))
     ignores = tuple(dict.fromkeys(ignore))
     _ignore_tree(ignores, keys)
+    schema_ignores = tuple(dict.fromkeys(schema_ignore))
+    _ignore_tree(schema_ignores, ())
+    if schema_ignores and not schema_diff:
+        raise ConfigurationError("schema_ignore requires schema_diff=True")
     where_expression = None if where is None else _compile_where(where)
     try:
         duplicate_policy = DuplicatePolicy(duplicates)
@@ -775,7 +1148,16 @@ def _configuration(
         and (not isinstance(max_temp, int) or isinstance(max_temp, bool) or max_temp <= 0)
     ):
         raise ConfigurationError("max_temp must be a positive integer")
-    return DiffConfig(keys, ignores, where, duplicate_policy, max_temp, where_expression)
+    return DiffConfig(
+        key=keys,
+        ignore=ignores,
+        where=where,
+        duplicates=duplicate_policy,
+        max_temp=max_temp,
+        where_expression=where_expression,
+        schema_diff=schema_diff,
+        schema_ignore=schema_ignores,
+    )
 
 
 def diff(
@@ -787,9 +1169,19 @@ def diff(
     where: Optional[str] = None,
     duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
     max_temp: Optional[int] = None,
+    schema_diff: bool = False,
+    schema_ignore: Sequence[str] = (),
 ) -> DiffResult:
     """Create a context-managed, disk-backed comparison."""
-    config = _configuration(key, ignore, where, duplicates, max_temp)
+    config = _configuration(
+        key,
+        ignore,
+        where,
+        duplicates,
+        max_temp,
+        schema_diff,
+        schema_ignore,
+    )
     return DiffResult(old, new, config)
 
 
@@ -817,6 +1209,39 @@ def _duplicate_dict(duplicate: Duplicate) -> Dict[str, Any]:
     }
 
 
+def _schema_profile_dict(profile: SchemaFieldProfile) -> Dict[str, Any]:
+    return {
+        "parent_objects": profile.parent_objects,
+        "present": profile.present,
+        "missing": profile.missing,
+        "nulls": profile.nulls,
+        "types": profile.type_counts,
+    }
+
+
+def _schema_change_dict(change: SchemaChange) -> Dict[str, Any]:
+    result = {
+        "type": "schema_change",
+        "op": change.operation.value,
+        "path": change.path,
+    }
+    if change.old is not None:
+        result["old"] = _schema_profile_dict(change.old)
+    if change.new is not None:
+        result["new"] = _schema_profile_dict(change.new)
+    return result
+
+
+def _schema_summary_dict(summary: SchemaSummary) -> Dict[str, int]:
+    return {
+        "fields_added": summary.fields_added,
+        "fields_removed": summary.fields_removed,
+        "types_changed": summary.types_changed,
+        "nullability_changed": summary.nullability_changed,
+        "requiredness_changed": summary.requiredness_changed,
+    }
+
+
 def _write_text(result: DiffResult) -> None:
     summary = result.summary
     print("Records:")
@@ -826,22 +1251,37 @@ def _write_text(result: DiffResult) -> None:
     print("  modified:  {:,}".format(summary.modified))
     print("  OLD duplicates:  {:,}".format(summary.old_duplicates))
     print("  NEW duplicates:  {:,}".format(summary.new_duplicates))
+    if summary.schema is not None:
+        print()
+        print("Observed schema:")
+        print("  fields added:          {:,}".format(summary.schema.fields_added))
+        print("  fields removed:        {:,}".format(summary.schema.fields_removed))
+        print("  type changes:          {:,}".format(summary.schema.types_changed))
+        print("  nullability changes:   {:,}".format(summary.schema.nullability_changed))
+        print("  requiredness changes:  {:,}".format(summary.schema.requiredness_changed))
 
 
 def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
     def events() -> Iterator[Dict[str, Any]]:
-        yield {
+        metadata = {
             "type": "meta",
             "key": list(result.config.key),
             "ignore": list(result.config.ignore),
             "where": result.config.where,
             "duplicates": result.config.duplicates.value,
         }
+        if result.config.schema_diff:
+            metadata["schema_diff"] = True
+            metadata["schema_ignore"] = list(result.config.schema_ignore)
+        yield metadata
+        if result.config.schema_diff:
+            for schema_change in result.schema_changes():
+                yield _schema_change_dict(schema_change)
         for duplicate in result.duplicates():
             yield _duplicate_dict(duplicate)
         for change in result.changes():
             yield _change_dict(change)
-        yield {
+        summary = {
             "type": "summary",
             "equal": result.equal,
             "added": result.added,
@@ -850,6 +1290,9 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
             "old_duplicates": result.old_duplicates,
             "new_duplicates": result.new_duplicates,
         }
+        if result.schema_summary is not None:
+            summary["schema"] = _schema_summary_dict(result.schema_summary)
+        yield summary
 
     jsonl.dump(events(), path, cls=_details_text)
 
@@ -873,6 +1316,8 @@ def _parser() -> argparse.ArgumentParser:
         default=DuplicatePolicy.ERROR.value,
     )
     parser.add_argument("--details", metavar="FILE")
+    parser.add_argument("--schema-diff", action="store_true")
+    parser.add_argument("--schema-ignore", action="append", default=[], metavar="POINTER")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--max-temp", type=int)
     return parser
@@ -887,6 +1332,8 @@ def _run_comparison(arguments: argparse.Namespace, old: Any, new: Any, keys: Tup
         where=arguments.where,
         duplicates=arguments.duplicates,
         max_temp=arguments.max_temp,
+        schema_diff=arguments.schema_diff,
+        schema_ignore=arguments.schema_ignore,
     ) as result:
         if arguments.details:
             _write_details(result, arguments.details)
@@ -902,6 +1349,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     arguments = parser.parse_args(argv)
     if arguments.old == "-" and arguments.new == "-":
         parser.error("OLD and NEW cannot both read from stdin")
+    if arguments.schema_ignore and not arguments.schema_diff:
+        parser.error("--schema-ignore requires --schema-diff")
     old = sys.stdin.buffer if arguments.old == "-" else arguments.old
     new = sys.stdin.buffer if arguments.new == "-" else arguments.new
     keys = tuple(name.strip() for item in arguments.key for name in item.split(","))

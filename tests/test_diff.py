@@ -7,9 +7,12 @@ import pytest
 from jsonl_diff import (
     ChangeOperation,
     ConfigurationError,
+    DiffConfig,
     DuplicateKeyError,
     DuplicatePolicy,
     InputError,
+    SchemaChangeOperation,
+    SchemaSummary,
     Summary,
     diff,
 )
@@ -716,6 +719,260 @@ class TestInputValidation:
 
         # Assert
         assert captured.value.line == 2
+
+
+class TestSchemaDiff:
+    def test_diff_config_preserves_positional_where_expression(self):
+        # Arrange
+        expression = object()
+
+        # Act
+        config = DiffConfig(
+            ("id",),
+            (),
+            None,
+            DuplicatePolicy.ERROR,
+            None,
+            expression,
+        )
+
+        # Assert
+        assert config.where_expression is expression
+        assert config.schema_diff is False
+        assert config.schema_ignore == ()
+
+    def test_reports_field_type_nullability_and_requiredness_changes(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [
+                {"id": 1, "age": 36, "email": None},
+                {"id": 2, "age": 41, "email": "alan@example.com"},
+            ],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [
+                {"id": 1, "age": "36", "email": "ada@example.com", "country": "ES"},
+                {"id": 2, "age": "41", "country": "UK"},
+            ],
+        )
+
+        # Act
+        with diff(old, new, key="id", schema_diff=True) as result:
+            summary = result.summary
+            changes = list(result.schema_changes())
+
+        # Assert
+        assert summary.schema == SchemaSummary(
+            fields_added=1,
+            types_changed=1,
+            nullability_changed=1,
+            requiredness_changed=1,
+        )
+        assert summary.has_schema_changes is True
+        assert summary.has_issues is True
+        assert [(change.operation, change.path) for change in changes] == [
+            (SchemaChangeOperation.TYPES_CHANGED, "/age"),
+            (SchemaChangeOperation.FIELD_ADDED, "/country"),
+            (SchemaChangeOperation.NULLABILITY_CHANGED, "/email"),
+            (SchemaChangeOperation.REQUIREDNESS_CHANGED, "/email"),
+        ]
+        email = changes[-1]
+        assert email.old.parent_objects == 2
+        assert email.old.present == 2
+        assert email.old.nulls == 1
+        assert email.old.type_counts == {"string": 1}
+        assert email.new.missing == 1
+
+    def test_nested_objects_use_escaped_pointers_and_arrays_are_terminal(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "meta": {"a/b": 1}, "items": [{"value": 1}]}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "meta": {"a/b": "1"}, "items": [{"other": True}]}],
+        )
+
+        # Act
+        with diff(old, new, key="id", schema_diff=True) as result:
+            changes = list(result.schema_changes())
+
+        # Assert
+        assert [(change.operation, change.path) for change in changes] == [
+            (SchemaChangeOperation.TYPES_CHANGED, "/meta/a~1b"),
+        ]
+        assert all(not change.path.startswith("/items/") for change in changes)
+
+    def test_nested_requiredness_is_relative_to_parent_objects(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "profile": {"city": "Madrid"}}, {"id": 2}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "profile": {"city": "Madrid"}}, {"id": 2, "profile": {}}],
+        )
+
+        # Act
+        with diff(old, new, key="id", schema_diff=True) as result:
+            changes = list(result.schema_changes(SchemaChangeOperation.REQUIREDNESS_CHANGED))
+
+        # Assert
+        city = next(change for change in changes if change.path == "/profile/city")
+        assert city.old.parent_objects == 1
+        assert city.old.required is True
+        assert city.new.parent_objects == 2
+        assert city.new.required is False
+
+    def test_schema_ignore_is_independent_from_content_ignore(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "legacy": "value"}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        with diff(old, new, key="id", ignore=("/legacy",), schema_diff=True) as observed:
+            observed_summary = observed.summary
+        with diff(
+            old,
+            new,
+            key="id",
+            ignore=("/legacy",),
+            schema_diff=True,
+            schema_ignore=("/legacy",),
+        ) as ignored:
+            ignored_summary = ignored.summary
+
+        # Assert
+        assert observed_summary.different is False
+        assert observed_summary.has_schema_changes is True
+        assert ignored_summary.has_issues is False
+
+    def test_schema_profile_includes_discarded_duplicate_occurrences(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}, {"id": 1, "extra": True}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        with diff(old, new, key="id", duplicates="first", schema_diff=True) as result:
+            changes = list(result.schema_changes())
+            summary = result.summary
+
+        # Assert
+        assert summary.different is False
+        assert summary.old_duplicates == 1
+        assert [(change.operation, change.path) for change in changes] == [
+            (SchemaChangeOperation.FIELD_REMOVED, "/extra"),
+        ]
+
+    def test_schema_counts_are_aggregated_across_batches(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": index, "value": index} for index in range(1025)],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": index, "value": str(index)} for index in range(1025)],
+        )
+
+        # Act
+        with diff(old, new, key="id", schema_diff=True) as result:
+            change = next(
+                result.schema_changes(SchemaChangeOperation.TYPES_CHANGED),
+            )
+
+        # Assert
+        assert change.path == "/value"
+        assert change.old.type_counts == {"integer": 1025}
+        assert change.new.type_counts == {"string": 1025}
+
+    def test_schema_types_follow_json_value_semantics(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [
+                {"id": 1, "value": True},
+                {"id": 2, "value": 1.0},
+                {"id": 3, "value": 1.5},
+            ],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [
+                {"id": 1, "value": "true"},
+                {"id": 2, "value": "1.0"},
+                {"id": 3, "value": "1.5"},
+            ],
+        )
+
+        # Act
+        with diff(old, new, key="id", schema_diff=True) as result:
+            change = next(
+                result.schema_changes(SchemaChangeOperation.TYPES_CHANGED),
+            )
+
+        # Assert
+        assert change.old.type_counts == {
+            "boolean": 1,
+            "integer": 1,
+            "number": 1,
+        }
+        assert change.new.type_counts == {"string": 3}
+
+    def test_schema_profile_only_includes_records_selected_by_where(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [
+                {"id": 1, "active": True, "legacy": "selected"},
+                {"id": 2, "active": False, "ignored_by_where": "old"},
+            ],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [
+                {"id": 1, "active": True},
+                {"id": 2, "active": False, "new_but_ignored": "new"},
+            ],
+        )
+
+        # Act
+        with diff(
+            old,
+            new,
+            key="id",
+            where="active == `true`",
+            schema_diff=True,
+        ) as result:
+            changes = list(result.schema_changes())
+
+        # Assert
+        assert [(change.operation, change.path) for change in changes] == [
+            (SchemaChangeOperation.FIELD_REMOVED, "/legacy"),
+        ]
+
+    def test_schema_ignore_requires_schema_diff(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [])
+        new = write_jsonl("new.jsonl", [])
+
+        # Act / Assert
+        with pytest.raises(ConfigurationError, match="schema_ignore requires schema_diff"):
+            diff(old, new, key="id", schema_ignore=("/metadata",))
+
+    def test_schema_iteration_requires_enabled_open_result(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act / Assert
+        with diff(old, new, key="id") as result:
+            with pytest.raises(RuntimeError, match="schema diff was not enabled"):
+                next(result.schema_changes())
 
 
 class TestChanges:

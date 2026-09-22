@@ -67,6 +67,7 @@ Record order does not matter.
 * Optional **JMESPath** filtering with `--where`.
 * Configurable duplicate handling with counts and diagnostics: `error`, `first`, or `last`.
 * Exact **RFC 6901** JSON Pointer ignores.
+* Optional disk-backed observed-schema diff for fields, types, nullability, and requiredness.
 * Semantic number comparison using `Decimal`.
 * Deterministic summaries and change iteration.
 * Original OLD/NEW physical line numbers.
@@ -79,7 +80,7 @@ Record order does not matter.
 ```text
 jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
            [--duplicates {error,first,last}] [--details FILE] [--quiet]
-           [--max-temp MAX_TEMP]
+           [--schema-diff] [--schema-ignore POINTER] [--max-temp MAX_TEMP]
            old new
 ```
 
@@ -91,6 +92,8 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--where EXPRESSION`  | JMESPath filter applied to each record                                         |
 | `--duplicates POLICY` | `error` (default), or select and report duplicates with `first`/`last`          |
 | `--details FILE`      | Write deterministic machine-readable JSONL changes                             |
+| `--schema-diff`       | Compare observed fields, types, nullability, and requiredness                   |
+| `--schema-ignore`     | RFC 6901 pointer to exclude from observed-schema profiling                      |
 | `--quiet`             | Suppress the normal summary                                                    |
 | `--max-temp BYTES`    | Best-effort budget for `jsonl-diff` workspace temporary storage                |
 
@@ -111,6 +114,12 @@ jsonl-diff old.jsonl new.jsonl \
   --key id \
   --where 'deleted_at == `null`'
 
+# Detect observed schema drift
+jsonl-diff old.jsonl new.jsonl \
+  --key id \
+  --schema-diff \
+  --schema-ignore /metadata
+
 # Compressed input
 jsonl-diff old.jsonl.xz new.jsonl.gz --key id
 ```
@@ -119,8 +128,8 @@ jsonl-diff old.jsonl.xz new.jsonl.gz --key id
 
 | Code | Meaning                                                    |
 | ---: | ---------------------------------------------------------- |
-|  `0` | Inputs are equal and contain no tolerated duplicates       |
-|  `1` | Record differences or tolerated duplicate identities found |
+|  `0` | No record, duplicate, or requested observed-schema issues   |
+|  `1` | Record differences, tolerated duplicates, or schema changes |
 |  `2` | Input, resource, output, or runtime error                  |
 |  `3` | Invalid CLI configuration or usage                         |
 
@@ -135,11 +144,15 @@ with diff(
     key=("country", "customerId"),
     ignore=("/updated_at",),
     where='country == `"ES"`',
+    schema_diff=True,
 ) as result:
     print(result.summary)
 
     for change in result.changes(ChangeOperation.MODIFIED):
         print(change.key, change.old_line, change.new_line)
+
+    for change in result.schema_changes():
+        print(change.operation, change.path)
 ```
 
 `diff()` returns a disk-backed `DiffResult`, used as a context manager.
@@ -181,7 +194,9 @@ signature, result models, `Decimal` key semantics, and error hierarchy.
 * Changes are reported in deterministic identity order.
 
 `--where` selects which records participate; `--key` defines identity;
-`--ignore` removes fields from content comparison. See
+`--ignore` removes fields from content comparison. With `--schema-diff`,
+`--schema-ignore` independently removes fields from observed-schema profiling.
+See
 [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) for the full rules,
 including duplicate handling, ignore-pointer edge cases, `--where` evaluation
 order, and canonical number formatting.
@@ -211,7 +226,7 @@ support matrix and how sources are delegated to `py-jsonl`.
 * nested identities or automatic key detection
 * fuzzy matching or numeric tolerances
 * unordered-array comparison
-* schema validation or input repair
+* validation against a declared schema or input repair
 * ZIP, database, or cloud-provider inputs
 * GUI or HTML reports
 
