@@ -11,7 +11,9 @@
 Compare large JSONL/NDJSON datasets **by record identity instead of line
 position**, without loading the complete inputs into memory.
 
-`jsonl-diff` matches records using one or more top-level fields and reports: `equal` `added` `deleted` `modified`
+`jsonl-diff` matches records using one or more top-level fields and reports:
+`equal`, `added`, `deleted`, `modified`, and tolerated duplicates in each
+source.
 
 It is useful for snapshots, ETL validation, migrations, exports, and CI checks.
 
@@ -52,6 +54,8 @@ Records:
   added:     1
   deleted:   0
   modified:  1
+  OLD duplicates:  0
+  NEW duplicates:  0
 ```
 
 Record order does not matter.
@@ -61,7 +65,7 @@ Record order does not matter.
 * Single or composite top-level identities.
 * Disk-backed comparison for large datasets ([architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md)).
 * Optional **JMESPath** filtering with `--where`.
-* Configurable duplicate handling: `error`, `first`, or `last`.
+* Configurable duplicate handling with counts and diagnostics: `error`, `first`, or `last`.
 * Exact **RFC 6901** JSON Pointer ignores.
 * Semantic number comparison using `Decimal`.
 * Deterministic summaries and change iteration.
@@ -85,7 +89,7 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--key KEY`           | Required top-level identity field; repeat or comma-separate for composite keys |
 | `--ignore POINTER`    | RFC 6901 pointer to exclude from content comparison                            |
 | `--where EXPRESSION`  | JMESPath filter applied to each record                                         |
-| `--duplicates POLICY` | `error` (default), `first`, or `last`                                          |
+| `--duplicates POLICY` | `error` (default), or select and report duplicates with `first`/`last`          |
 | `--details FILE`      | Write deterministic machine-readable JSONL changes                             |
 | `--quiet`             | Suppress the normal summary                                                    |
 | `--max-temp BYTES`    | Best-effort budget for `jsonl-diff` workspace temporary storage                |
@@ -113,12 +117,12 @@ jsonl-diff old.jsonl.xz new.jsonl.gz --key id
 
 ### Exit codes
 
-| Code | Meaning                                   |
-| ---: | ----------------------------------------- |
-|  `0` | Inputs are equal                          |
-|  `1` | Added, deleted, or modified records found |
-|  `2` | Input, resource, output, or runtime error |
-|  `3` | Invalid CLI configuration or usage        |
+| Code | Meaning                                                    |
+| ---: | ---------------------------------------------------------- |
+|  `0` | Inputs are equal and contain no tolerated duplicates       |
+|  `1` | Record differences or tolerated duplicate identities found |
+|  `2` | Input, resource, output, or runtime error                  |
+|  `3` | Invalid CLI configuration or usage                         |
 
 ## Python API
 
@@ -169,7 +173,8 @@ signature, result models, `Decimal` key semantics, and error hierarchy.
 * Blank lines, malformed JSON, duplicate properties, `NaN`, and infinities are rejected.
 * Identity fields must be top-level scalar values (`null` allowed only as one component of a composite key).
 * Identity types remain significant: `"1"` ≠ `1`, `true` ≠ `1`.
-* Duplicate identities fail by default; `--duplicates first`/`last` tolerate them.
+* Duplicate identities fail by default; `--duplicates first`/`last` select one
+  occurrence, report every discarded occurrence, and return exit code `1`.
 * Object property order is ignored; array order is significant.
 * Numbers are compared by mathematical value: `1`, `1.0`, and `1e0` are equal.
 * Unicode strings are compared without normalization.

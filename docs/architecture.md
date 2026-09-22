@@ -11,14 +11,18 @@ Each record is parsed and validated incrementally, normalized, and inserted
 into a private SQLite database under an operating-system temporary directory.
 The database stores the typed canonical identity, original line, content
 length, and SHA-256 digest; the full canonical bytes are not persisted. A
-uniqueness constraint detects duplicate identities. SQL joins calculate the
-summary, and ordered SQLite cursors drive lazy change iteration.
+uniqueness constraint detects duplicate identities. When `first` or `last`
+tolerates a collision, a second table stores the discarded occurrence's
+identity, physical line, canonical length, and digest. SQL joins calculate the
+summary, and ordered SQLite cursors drive lazy change and duplicate iteration.
 
 This architecture bounds memory by the records currently being processed and
 database buffers; it does not keep the complete decoded inputs or all changes
 in RAM. It does require temporary disk space. The identity, line, length, and
 digest index remains until the `DiffResult` is closed, so temporary usage
-scales with the number of records rather than the combined input size.
+scales with the number of selected records plus tolerated duplicate
+occurrences rather than the combined input size. Duplicate diagnostics compare
+stored fingerprints and do not require retaining or rereading full records.
 
 ## `max_temp` / `--max-temp`
 

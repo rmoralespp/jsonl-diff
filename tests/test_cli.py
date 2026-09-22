@@ -160,7 +160,7 @@ class TestCliExitCodes:
         )
 
         # Assert
-        assert exit_code == 0
+        assert exit_code == 1
         assert capsys.readouterr() == ("", "")
 
     @pytest.mark.parametrize("stdin_side", ["old", "new"])
@@ -262,6 +262,8 @@ class TestTextOutput:
             "  added:     1\n"
             "  deleted:   1\n"
             "  modified:  1\n"
+            "  OLD duplicates:  0\n"
+            "  NEW duplicates:  0\n"
         )
 
     def test_details_do_not_change_stdout_summary(self, write_jsonl, tmp_path, capsys):
@@ -280,6 +282,28 @@ class TestTextOutput:
             "  added:     1\n"
             "  deleted:   1\n"
             "  modified:  1\n"
+            "  OLD duplicates:  0\n"
+            "  NEW duplicates:  0\n"
+        )
+
+    def test_tolerated_duplicates_are_reported_for_each_source(
+        self,
+        write_jsonl,
+        capsys,
+    ):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}, {"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}, {"id": 1}, {"id": 1}])
+
+        # Act
+        exit_code = main([str(old), str(new), "--key", "id", "--duplicates", "first"])
+        output = capsys.readouterr().out
+
+        # Assert
+        assert exit_code == 1
+        assert output.endswith(
+            "  OLD duplicates:  1\n"
+            "  NEW duplicates:  2\n",
         )
 
 
@@ -387,6 +411,8 @@ class TestDetailsOutput:
             "added": 0,
             "deleted": 0,
             "modified": 0,
+            "old_duplicates": 0,
+            "new_duplicates": 0,
         }]
 
     def test_file_contains_deterministically_ordered_changes(
@@ -446,6 +472,65 @@ class TestDetailsOutput:
 
         # Assert
         assert records[1]["key"] == [12345678901234567890]
+
+    def test_duplicate_events_follow_meta_and_include_policy_outcome(
+        self,
+        write_jsonl,
+        tmp_path,
+        capsys,
+    ):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [
+                {"id": 1, "value": "selected"},
+                {"id": 1, "value": "selected"},
+                {"id": 1, "value": "conflicting"},
+            ],
+        )
+        new = write_jsonl("new.jsonl", [{"id": 1, "value": "selected"}])
+        details = tmp_path / "changes.jsonl"
+
+        # Act
+        exit_code = main(
+            [
+                str(old),
+                str(new),
+                "--key",
+                "id",
+                "--duplicates",
+                "first",
+                "--details",
+                str(details),
+                "--quiet",
+            ],
+        )
+        records = [json.loads(line) for line in details.read_text(encoding="utf-8").splitlines()]
+
+        # Assert
+        assert exit_code == 1
+        assert capsys.readouterr() == ("", "")
+        assert records[0]["duplicates"] == "first"
+        assert records[1:3] == [
+            {
+                "type": "duplicate",
+                "source": "OLD",
+                "key": [1],
+                "selected_line": 1,
+                "discarded_line": 2,
+                "content_equal": True,
+            },
+            {
+                "type": "duplicate",
+                "source": "OLD",
+                "key": [1],
+                "selected_line": 1,
+                "discarded_line": 3,
+                "content_equal": False,
+            },
+        ]
+        assert records[-1]["old_duplicates"] == 2
+        assert records[-1]["new_duplicates"] == 0
 
 
 class TestQuietOutput:

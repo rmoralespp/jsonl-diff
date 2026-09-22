@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Added:** Tolerated duplicate identities are counted per source and exposed
+  as deterministic API and `--details` diagnostics with selected/discarded
+  physical lines and canonical-content equality.
+- **Changed:** Tolerated duplicates now produce CLI exit code `1`, even when
+  the selected OLD and NEW records otherwise compare equal.
 - **Docs:** Clarify that `max_temp` is a best-effort budget for the `jsonl-diff` workspace, not a global limit for all temporary storage used by the process.
 - **Docs:** Clarify that composite identities may contain `null` components, but uniqueness is always enforced on the complete identity tuple.
 - **Changed:** Internal JSON value types now distinguish parser-produced `Decimal` numbers from native Python `int`/`float` values accepted only by numeric canonicalization helpers.
