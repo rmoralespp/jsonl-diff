@@ -11,14 +11,38 @@ Each record is parsed and validated incrementally, normalized, and inserted
 into a private SQLite database under an operating-system temporary directory.
 The primary index stores the typed canonical identity, original line, content
 length, and SHA-256 digest; it does not retain the full canonical bytes. A
-uniqueness constraint detects duplicate identities. SQL joins calculate the
-summary, and ordered SQLite cursors drive lazy change iteration.
+uniqueness constraint detects duplicate identities. When `first` or `last`
+tolerates a collision, a second table stores the discarded occurrence's
+identity, physical line, canonical length, and digest. SQL joins calculate the
+summary, and ordered SQLite cursors drive lazy change and duplicate iteration.
 
 This architecture bounds memory by the records currently being processed and
 database buffers; it does not keep the complete decoded inputs or all changes
 in RAM. It does require temporary disk space. The identity, line, length, and
 digest index remains until the `DiffResult` is closed, so temporary usage
-scales with the number of records rather than the combined input size.
+scales with the number of selected records plus tolerated duplicate
+occurrences rather than the combined input size. Duplicate diagnostics compare
+stored fingerprints and do not require retaining or rereading full records.
+
+## Observed-schema profile
+
+When `schema_diff=True` / `--schema-diff` is enabled, indexing also builds an
+observed-schema profile in the same SQLite workspace. The profile stores one
+aggregate row per source and RFC 6901 field path, plus object-occurrence counts
+used to distinguish a missing field from an explicit `null`.
+
+Per-record observations are accumulated in small Python dictionaries and
+flushed to SQLite every 1024 physical lines. SQLite upserts add the batch
+counts, so profiling does not perform one database write for every field in
+every record. Memory scales with the distinct paths in the current batch and
+record; disk usage scales with distinct observed paths rather than the number
+of records. Datasets with dynamic property names can still create large
+profiles, and those tables count toward `max_temp`.
+
+Schema profiling happens during the original input pass and does not retain
+complete records or reread a source. It therefore works with stdin, remote,
+and compressed sources. Nested objects are traversed iteratively. Arrays are
+profiled as terminal `array` values; their elements are not inferred.
 
 With CLI `--field-diff`, the fingerprint pass remains unchanged. When
 modified identities exist, each source is read a second time and the normalized

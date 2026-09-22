@@ -11,7 +11,9 @@
 Compare large JSONL/NDJSON datasets **by record identity instead of line
 position**, without loading the complete inputs into memory.
 
-`jsonl-diff` matches records using one or more top-level fields and reports: `equal` `added` `deleted` `modified`
+`jsonl-diff` matches records using one or more top-level fields and reports:
+`equal`, `added`, `deleted`, `modified`, and tolerated duplicates in each
+source.
 
 It is useful for snapshots, ETL validation, migrations, exports, and CI checks.
 
@@ -50,6 +52,8 @@ Records:
   added:     1
   deleted:   0
   modified:  1
+  OLD duplicates:  0
+  NEW duplicates:  0
 ```
 
 Record order does not matter.
@@ -59,8 +63,9 @@ Record order does not matter.
 * Single or composite top-level identities.
 * Disk-backed comparison for large datasets ([architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md)).
 * Optional **JMESPath** filtering with `--where`.
-* Configurable duplicate handling: `error`, `first`, or `last`.
+* Configurable duplicate handling with counts and diagnostics: `error`, `first`, or `last`.
 * Exact **RFC 6901** JSON Pointer ignores.
+* Optional disk-backed observed-schema diff for fields, types, nullability, and requiredness.
 * Semantic number comparison using `Decimal`.
 * Deterministic summaries and change iteration.
 * Original OLD/NEW physical line numbers.
@@ -74,7 +79,8 @@ Record order does not matter.
 ```text
 jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
            [--duplicates {error,first,last}] [--details FILE] [--field-diff]
-           [--quiet] [--max-temp MAX_TEMP]
+           [--schema-diff] [--schema-ignore POINTER] [--quiet]
+           [--max-temp MAX_TEMP]
            old new
 ```
 
@@ -84,9 +90,11 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--key KEY`           | Required top-level identity field; repeat or comma-separate for composite keys |
 | `--ignore POINTER`    | RFC 6901 pointer to exclude from content comparison                            |
 | `--where EXPRESSION`  | JMESPath filter applied to each record                                         |
-| `--duplicates POLICY` | `error` (default), `first`, or `last`                                          |
+| `--duplicates POLICY` | `error` (default), or select and report duplicates with `first`/`last`          |
 | `--details FILE`      | Write deterministic machine-readable JSONL changes                             |
 | `--field-diff`        | Add field changes (requires `--details` and sources other than stdin)          |
+| `--schema-diff`       | Compare observed fields, types, nullability, and requiredness                   |
+| `--schema-ignore`     | RFC 6901 pointer to exclude from observed-schema profiling                      |
 | `--quiet`             | Suppress the normal summary                                                    |
 | `--max-temp BYTES`    | Best-effort budget for `jsonl-diff` workspace temporary storage                |
 
@@ -107,6 +115,12 @@ jsonl-diff old.jsonl new.jsonl \
   --key id \
   --where 'deleted_at == `null`'
 
+# Detect observed schema drift
+jsonl-diff old.jsonl new.jsonl \
+  --key id \
+  --schema-diff \
+  --schema-ignore /metadata
+
 # Compressed input
 jsonl-diff old.jsonl.xz new.jsonl.gz --key id
 
@@ -118,12 +132,12 @@ jsonl-diff old.jsonl new.jsonl --key id \
 
 ### Exit codes
 
-| Code | Meaning                                   |
-| ---: | ----------------------------------------- |
-|  `0` | Inputs are equal                          |
-|  `1` | Added, deleted, or modified records found |
-|  `2` | Input, resource, output, or runtime error |
-|  `3` | Invalid CLI configuration or usage        |
+| Code | Meaning                                                    |
+| ---: | ---------------------------------------------------------- |
+|  `0` | No record, duplicate, or requested observed-schema issues   |
+|  `1` | Record differences, tolerated duplicates, or schema changes |
+|  `2` | Input, resource, output, or runtime error                  |
+|  `3` | Invalid CLI configuration or usage                         |
 
 ## Python API
 
@@ -136,11 +150,15 @@ with diff(
     key=("country", "customerId"),
     ignore=("/updated_at",),
     where='country == `"ES"`',
+    schema_diff=True,
 ) as result:
     print(result.summary)
 
     for change in result.changes(ChangeOperation.MODIFIED):
         print(change.key, change.old_line, change.new_line)
+
+    for change in result.schema_changes():
+        print(change.operation, change.path)
 ```
 
 `diff()` returns a disk-backed `DiffResult`, used as a context manager.
@@ -174,14 +192,17 @@ signature, result models, `Decimal` key semantics, and error hierarchy.
 * Blank lines, malformed JSON, duplicate properties, `NaN`, and infinities are rejected.
 * Identity fields must be top-level scalar values (`null` allowed only as one component of a composite key).
 * Identity types remain significant: `"1"` ≠ `1`, `true` ≠ `1`.
-* Duplicate identities fail by default; `--duplicates first`/`last` tolerate them.
+* Duplicate identities fail by default; `--duplicates first`/`last` select one
+  occurrence, report every discarded occurrence, and return exit code `1`.
 * Object property order is ignored; array order is significant.
 * Numbers are compared by mathematical value: `1`, `1.0`, and `1e0` are equal.
 * Unicode strings are compared without normalization.
 * Changes are reported in deterministic identity order.
 
 `--where` selects which records participate; `--key` defines identity;
-`--ignore` removes fields from content comparison. See
+`--ignore` removes fields from content comparison. With `--schema-diff`,
+`--schema-ignore` independently removes fields from observed-schema profiling.
+See
 [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) for the full rules,
 including duplicate handling, ignore-pointer edge cases, `--where` evaluation
 order, and canonical number formatting.
@@ -212,7 +233,7 @@ support matrix and how sources are delegated to `py-jsonl`.
 * nested identities or automatic key detection
 * fuzzy matching or numeric tolerances
 * unordered-array comparison
-* schema validation or input repair
+* validation against a declared schema or input repair
 * ZIP, database, or cloud-provider inputs
 * GUI or HTML reports
 
