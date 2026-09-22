@@ -313,9 +313,37 @@ class TestDetailsNumberOutput:
         # Act
         main([str(old), str(new), "--key", "id", "--details", str(details), "--quiet"])
         line = details.read_text(encoding="utf-8").splitlines()[1]
+        event = json.loads(line, parse_int=Decimal, parse_float=Decimal)
 
         # Assert
-        assert '"key":[{}]'.format(value) in line
+        assert event["key"] == [Decimal(value)]
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("1e3", "1e+3"),
+            ("1e50000000", "1e+50000000"),
+            ("1e-50000000", "1e-50000000"),
+        ],
+    )
+    def test_numeric_key_uses_compact_decimal_notation(
+        self,
+        write_jsonl,
+        tmp_path,
+        value,
+        expected,
+    ):
+        # Arrange
+        old = write_jsonl("old.jsonl", ['{"id":%s}' % value])
+        new = write_jsonl("new.jsonl", [])
+        details = tmp_path / "changes.jsonl"
+
+        # Act
+        main([str(old), str(new), "--key", "id", "--details", str(details), "--quiet"])
+        line = details.read_text(encoding="utf-8").splitlines()[1]
+
+        # Assert
+        assert '"key":[{}]'.format(expected) in line
 
 
 class TestDetailsOutput:

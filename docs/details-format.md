@@ -4,9 +4,9 @@
 
 `--details FILE` (CLI) streams a deterministic, machine-readable JSONL report
 after both inputs have been completely indexed and validated. Counters, line
-numbers, and numeric keys use readable JSON number notation without losing
-precision; only magnitudes that would require an extremely long fixed
-representation use exponent notation.
+numbers, and numeric keys use their natural JSON number notation without
+losing precision. `Decimal` values may retain exponent notation, which also
+keeps extreme magnitudes compact.
 
 ```bash
 jsonl-diff old.jsonl new.jsonl --key id --details changes.jsonl

@@ -27,7 +27,6 @@ _MISSING = object()
 # Avoid per-record filesystem scans: SQLite already enforces the main size limit.
 # Check periodically and once after each side finishes to catch extra temp/journal growth.
 _SIZE_CHECK_INTERVAL = 1024
-_PLAIN_NUMBER_MAX_LENGTH = 1000
 
 
 class JsonlDiffError(Exception):
@@ -190,26 +189,10 @@ def _number(value: Number) -> str:
 
 
 def _details_number(value: Number) -> str:
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("non-finite numbers are not valid JSON")
-        value = Decimal(str(value))
-    if not isinstance(value, Decimal) or not value.is_finite():
+    if isinstance(value, float) and not math.isfinite(value):
         raise ValueError("non-finite numbers are not valid JSON")
-    if value.is_zero():
-        return "0"
-
-    sign, digits, exponent = value.as_tuple()
-    if exponent >= 0:
-        plain_length = sign + len(digits) + exponent
-    elif len(digits) + exponent > 0:
-        plain_length = sign + len(digits) + 1
-    else:
-        plain_length = sign + 2 - exponent
-    if plain_length <= _PLAIN_NUMBER_MAX_LENGTH:
-        return format(value, "f")
+    if isinstance(value, Decimal) and not value.is_finite():
+        raise ValueError("non-finite numbers are not valid JSON")
     return str(value).lower()
 
 
