@@ -3,7 +3,7 @@
 [← Back to README](../README.md)
 
 `--details FILE` (CLI) streams a deterministic, machine-readable JSONL report
-after both inputs have been completely indexed and validated:
+after both inputs have been completely indexed and validated.
 
 ```bash
 jsonl-diff old.jsonl new.jsonl --key id --details changes.jsonl
