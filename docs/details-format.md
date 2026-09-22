@@ -36,3 +36,7 @@ containing changed identity `2` and added identity `3`, the file is:
 The normal stdout summary is unchanged when `--details` is used, unless
 `--quiet` suppresses it. A write failure can leave a partial details file and
 returns exit code `2`.
+
+Counters, line numbers, and numeric keys use readable JSON number notation.
+Numeric precision is preserved; only magnitudes that would require an
+extremely long fixed representation use exponent notation.

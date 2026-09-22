@@ -338,7 +338,8 @@ class TestDetailsOutput:
 
         # Act
         main([str(old), str(new), "--key", "id", "--details", str(details)])
-        records = [json.loads(line) for line in details.read_text(encoding="utf-8").splitlines()]
+        lines = details.read_text(encoding="utf-8").splitlines()
+        records = [json.loads(line) for line in lines]
         capsys.readouterr()
 
         # Assert
@@ -363,6 +364,7 @@ class TestDetailsOutput:
                 "new_line": 2,
             },
         ]
+        assert lines[-1] == '{"added":1,"deleted":1,"equal":0,"modified":1,"type":"summary"}'
 
     def test_large_numeric_key_is_written_without_precision_loss(
         self,
@@ -376,13 +378,33 @@ class TestDetailsOutput:
 
         # Act
         main([str(old), str(new), "--key", "id", "--details", str(details), "--quiet"])
+        lines = details.read_text(encoding="utf-8").splitlines()
         records = [
             json.loads(line, parse_int=Decimal, parse_float=Decimal)
-            for line in details.read_text(encoding="utf-8").splitlines()
+            for line in lines
         ]
 
         # Assert
         assert records[1]["key"] == [12345678901234567890]
+        assert '"key":[12345678901234567890]' in lines[1]
+
+    def test_fractional_numeric_key_is_written_without_precision_loss(
+        self,
+        write_jsonl,
+        tmp_path,
+    ):
+        # Arrange
+        value = "0.12345678901234567890123456789"
+        old = write_jsonl("old.jsonl", ['{"id":%s}' % value])
+        new = write_jsonl("new.jsonl", [])
+        details = tmp_path / "changes.jsonl"
+
+        # Act
+        main([str(old), str(new), "--key", "id", "--details", str(details), "--quiet"])
+        line = details.read_text(encoding="utf-8").splitlines()[1]
+
+        # Assert
+        assert '"key":[{}]'.format(value) in line
 
 
 class TestQuietOutput:

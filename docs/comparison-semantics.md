@@ -102,8 +102,10 @@ Canonical content is reduced to its length and a SHA-256 digest before being
 stored; content is considered equal when both match. A length+SHA-256 match
 is treated as proof of equality (the same trade-off relied upon by tools such
 as `git` and `rsync`); the full canonical bytes are not retained for
-comparison. Numbers are written using compact scientific notation; a large
-exponent does not expand into a large string of zeroes.
+comparison. Canonical numbers use compact scientific notation, so a large
+exponent does not expand into a large string of zeroes. This internal
+representation is independent of the readable number formatting used by
+`--details`.
 
 ## Determinism
 

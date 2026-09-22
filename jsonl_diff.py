@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
 import jmespath
 import jsonl
@@ -27,6 +27,7 @@ _MISSING = object()
 # Avoid per-record filesystem scans: SQLite already enforces the main size limit.
 # Check periodically and once after each side finishes to catch extra temp/journal growth.
 _SIZE_CHECK_INTERVAL = 1024
+_PLAIN_NUMBER_MAX_LENGTH = 1000
 
 
 class JsonlDiffError(Exception):
@@ -188,7 +189,35 @@ def _number(value: Number) -> str:
     return "{}{}e{:+d}".format("-" if sign else "", mantissa, scientific_exponent)
 
 
-def _canonical_text(value: Any, ensure_ascii: bool = False) -> str:
+def _details_number(value: Number) -> str:
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError("non-finite numbers are not valid JSON")
+        value = Decimal(str(value))
+    if not isinstance(value, Decimal) or not value.is_finite():
+        raise ValueError("non-finite numbers are not valid JSON")
+    if value.is_zero():
+        return "0"
+
+    sign, digits, exponent = value.as_tuple()
+    if exponent >= 0:
+        plain_length = sign + len(digits) + exponent
+    elif len(digits) + exponent > 0:
+        plain_length = sign + len(digits) + 1
+    else:
+        plain_length = sign + 2 - exponent
+    if plain_length <= _PLAIN_NUMBER_MAX_LENGTH:
+        return format(value, "f")
+    return str(value).lower()
+
+
+def _json_text(
+    value: Any,
+    ensure_ascii: bool,
+    number: Callable[[Number], str],
+) -> str:
     if value is None:
         return "null"
     if value is True:
@@ -196,23 +225,31 @@ def _canonical_text(value: Any, ensure_ascii: bool = False) -> str:
     if value is False:
         return "false"
     if isinstance(value, (Decimal, int, float)):
-        return _number(value)
+        return number(value)
     if isinstance(value, str):
         return json.dumps(value, ensure_ascii=ensure_ascii)
     if isinstance(value, (list, tuple)):
-        return "[{}]".format(",".join(_canonical_text(item, ensure_ascii) for item in value))
+        return "[{}]".format(",".join(_json_text(item, ensure_ascii, number) for item in value))
     if isinstance(value, dict):
         if any(not isinstance(name, str) for name in value):
             raise ValueError("JSON object property names must be strings")
         members = (
             "{}:{}".format(
                 json.dumps(name, ensure_ascii=ensure_ascii),
-                _canonical_text(value[name], ensure_ascii),
+                _json_text(value[name], ensure_ascii, number),
             )
             for name in sorted(value)
         )
         return "{{{}}}".format(",".join(members))
     raise ValueError("unsupported JSON value type: {}".format(type(value).__name__))
+
+
+def _canonical_text(value: Any, ensure_ascii: bool = False) -> str:
+    return _json_text(value, ensure_ascii, _number)
+
+
+def _details_text(value: Any, ensure_ascii: bool = False) -> str:
+    return _json_text(value, ensure_ascii, _details_number)
 
 
 def _canonical(value: Any) -> bytes:
@@ -687,7 +724,7 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
             "modified": result.modified,
         }
 
-    jsonl.dump(events(), path, cls=_canonical_text)
+    jsonl.dump(events(), path, cls=_details_text)
 
 
 class _ArgumentParser(argparse.ArgumentParser):
