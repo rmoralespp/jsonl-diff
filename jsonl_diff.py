@@ -390,6 +390,7 @@ class DiffResult:
                 line INTEGER NOT NULL,
                 length INTEGER NOT NULL,
                 digest BLOB NOT NULL,
+                content BLOB,
                 PRIMARY KEY (side, identity)
             ) WITHOUT ROWID
             """,
@@ -549,7 +550,7 @@ class DiffResult:
                 raise InputError(str(error), source, line) from error
             try:
                 cursor.execute(
-                    "{} INTO records VALUES (?, ?, ?, ?, ?)".format(insert),
+                    "{} INTO records VALUES (?, ?, ?, ?, ?, NULL)".format(insert),
                     (
                         side,
                         identity,
@@ -636,67 +637,27 @@ class DiffResult:
 
     def _prepare_field_diff(self) -> None:
         try:
-            self._create_field_diff_tables()
-            self._check_size()
             for side, source in enumerate((self._old, self._new)):
                 self._retrieve_field_records(source, side)
         except sqlite3.DatabaseError as error:
             raise ResourceError("could not store records for field diff") from error
 
-    def _create_field_diff_tables(self) -> None:
-        with self._connection:
-            self._connection.execute(
-                """
-                CREATE TABLE field_targets (
-                    side INTEGER NOT NULL,
-                    line INTEGER NOT NULL,
-                    identity BLOB NOT NULL,
-                    length INTEGER NOT NULL,
-                    digest BLOB NOT NULL,
-                    PRIMARY KEY (side, line)
-                ) WITHOUT ROWID
-                """,
-            )
-            self._connection.execute(
-                """
-                CREATE TABLE field_records (
-                    side INTEGER NOT NULL,
-                    identity BLOB NOT NULL,
-                    content BLOB NOT NULL,
-                    PRIMARY KEY (identity, side)
-                ) WITHOUT ROWID
-                """,
-            )
-            self._connection.execute(
-                """
-                INSERT INTO field_targets
-                SELECT 0, o.line, o.identity, o.length, o.digest
-                FROM records AS o JOIN records AS n USING (identity)
-                WHERE o.side = 0 AND n.side = 1
-                  AND (
-                      o.length != n.length
-                      OR o.digest != n.digest
-                  )
-                UNION ALL
-                SELECT 1, n.line, n.identity, n.length, n.digest
-                FROM records AS o JOIN records AS n USING (identity)
-                WHERE o.side = 0 AND n.side = 1
-                  AND (
-                      o.length != n.length
-                      OR o.digest != n.digest
-                  )
-                """,
-            )
-
     def _field_diff_targets(self, side: int) -> Iterator[Tuple[int, bytes, int, bytes]]:
         yield from self._connection.execute(
             """
-            SELECT line, identity, length, digest
-            FROM field_targets
-            WHERE side = ?
-            ORDER BY line
+            SELECT current.line, current.identity, current.length, current.digest
+            FROM records AS current
+            JOIN records AS other
+              ON current.identity = other.identity
+             AND other.side = ?
+            WHERE current.side = ?
+              AND (
+                  current.length != other.length
+                  OR current.digest != other.digest
+              )
+            ORDER BY current.line
             """,
-            (side,),
+            (1 - side, side),
         )
 
     def _retrieve_field_records(
@@ -717,12 +678,7 @@ class DiffResult:
             error_line[0] = line
 
         try:
-            with self._connection:
-                records = _records(source, on_error)
-                targets = self._field_diff_targets(side)
-                selected = self._target_field_records(records, targets, name)
-                for line, record, target in selected:
-                    self._store_field_record(side, name, line, record, target)
+            self._store_field_records(source, side, name, on_error)
         except JsonlDiffError:
             raise
         except sqlite3.DatabaseError:
@@ -733,53 +689,40 @@ class DiffResult:
             raise InputError(message, name, line) from error
         self._check_size()
 
-    @staticmethod
-    def _target_field_records(
-        records: Iterable[Any],
-        targets: Iterator[Tuple[int, bytes, int, bytes]],
-        source: str,
-    ) -> Iterator[Tuple[int, Any, Tuple[bytes, int, bytes]]]:
-        target = next(targets, None)
-        if target is None:
-            return
-        for line, record in enumerate(records, start=1):
-            target_line, identity, length, digest = target
-            if line < target_line:
-                continue
-            if line != target_line:
-                raise InputError("source changed while generating field diff", source, target_line)
-            yield line, record, (identity, length, digest)
+    def _store_field_records(self, source: Any, side: int, name: str, on_error: Any) -> None:
+        with self._connection:
+            targets = self._field_diff_targets(side)
             target = next(targets, None)
             if target is None:
                 return
-        raise InputError("source changed while generating field diff", source, target[0])
-
-    def _store_field_record(
-        self,
-        side: int,
-        source: str,
-        line: int,
-        record: Any,
-        target: Tuple[bytes, int, bytes],
-    ) -> None:
-        if not isinstance(record, dict):
-            raise InputError("each record must be a JSON object", source, line)
-        identity, expected_length, expected_digest = target
-        normalized = _remove_ignored(record, self._ignore_tree)
-        canonical = _canonical(normalized)
-        if _fingerprint(canonical) != (expected_length, expected_digest):
-            raise InputError("source changed while generating field diff", source, line)
-        self._connection.execute(
-            "INSERT INTO field_records VALUES (?, ?, ?)",
-            (side, identity, canonical),
-        )
+            for line, record in enumerate(_records(source, on_error), start=1):
+                target_line, identity, expected_length, expected_digest = target
+                if line < target_line:
+                    continue
+                if line != target_line:
+                    raise InputError("source changed while generating field diff", name, target_line)
+                if not isinstance(record, dict):
+                    raise InputError("each record must be a JSON object", name, line)
+                normalized = _remove_ignored(record, self._ignore_tree)
+                canonical = _canonical(normalized)
+                if _fingerprint(canonical) != (expected_length, expected_digest):
+                    raise InputError("source changed while generating field diff", name, line)
+                self._connection.execute(
+                    "UPDATE records SET content = ? WHERE side = ? AND identity = ?",
+                    (canonical, side, identity),
+                )
+                target = next(targets, None)
+                if target is None:
+                    break
+            if target is not None:
+                raise InputError("source changed while generating field diff", name, target[0])
 
     def _field_changes(self, change: Change) -> Iterator[Dict[str, Any]]:
         identity = _canonical(list(change.key))
         rows = self._connection.execute(
             """
             SELECT side, content
-            FROM field_records
+            FROM records
             WHERE identity = ?
             ORDER BY side
             """,
