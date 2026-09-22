@@ -94,6 +94,42 @@ string value must be quoted twice: `` `"ES"` ``. The bare form `` `ES` `` also
 works but is a deprecated JMESPath syntax that raises a
 `PendingDeprecationWarning`.
 
+## Observed schema diff
+
+`schema_diff=True` / `--schema-diff` profiles the structure observed in each
+filtered source and reports added or removed fields plus changes in types,
+nullability, and requiredness. This is data-driven inference, not validation
+against a declared schema: the absence of nulls or missing fields only
+describes the records read during that comparison.
+
+Profiles use RFC 6901 JSON Pointer paths and traverse nested objects. Arrays
+are terminal values; array elements and positional paths are not profiled.
+For every field, the profile records:
+
+- how many parent objects were observed;
+- how often the field was present or missing;
+- how often it was explicitly `null`;
+- frequencies for the non-null types `boolean`, `integer`, `number`, `string`,
+  `object`, and `array`.
+
+A field is observed as required when it is present in every occurrence of its
+parent object. Nested requiredness is therefore relative to parent-object
+occurrences, not to the number of root records. A field is observed as nullable
+when at least one explicit `null` occurs. Missing and `null` remain distinct.
+Numbers with no fractional value, including `1.0`, are classified as
+`integer`; other numbers are `number`.
+
+`--where` runs before profiling, so skipped records do not contribute.
+`--ignore` remains specific to content reconciliation and does not hide schema
+changes. Repeatable `--schema-ignore POINTER` exclusions apply only to schema
+profiling and require `--schema-diff`. Like content ignores, schema ignores may
+remove an entire array-valued member but may not traverse an array.
+
+Tolerated duplicate occurrences all contribute to the physical source profile,
+including occurrences discarded by `first` or `last`. Consequently, schema
+results do not depend on which duplicate occurrence is selected for record
+reconciliation. Schema changes cause CLI exit code `1`.
+
 ## Canonical content and numbers
 
 Records with the same identity are compared after ignored members are removed:

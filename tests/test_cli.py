@@ -200,6 +200,19 @@ class TestCliExitCodes:
         assert captured_exit.value.code == 3
         assert "cannot both read from stdin" in capsys.readouterr().err
 
+    def test_schema_ignore_without_schema_diff_is_rejected(self, write_jsonl, capsys):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        with pytest.raises(SystemExit) as captured_exit:
+            main([str(old), str(new), "--key", "id", "--schema-ignore", "/metadata"])
+
+        # Assert
+        assert captured_exit.value.code == 3
+        assert "--schema-ignore requires --schema-diff" in capsys.readouterr().err
+
 
 class TestKeyOptionParsing:
     def test_comma_separated_keys_with_surrounding_whitespace_are_trimmed(
@@ -306,6 +319,44 @@ class TestTextOutput:
             "  NEW duplicates:  2\n",
         )
 
+    def test_schema_diff_adds_observed_schema_summary(self, write_jsonl, capsys):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "legacy": "value"}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        exit_code = main(
+            [
+                str(old),
+                str(new),
+                "--key",
+                "id",
+                "--ignore",
+                "/legacy",
+                "--schema-diff",
+            ],
+        )
+        output = capsys.readouterr().out
+
+        # Assert
+        assert exit_code == 1
+        assert output == (
+            "Records:\n"
+            "  equal:     1\n"
+            "  added:     0\n"
+            "  deleted:   0\n"
+            "  modified:  0\n"
+            "  OLD duplicates:  0\n"
+            "  NEW duplicates:  0\n"
+            "\n"
+            "Observed schema:\n"
+            "  fields added:          0\n"
+            "  fields removed:        1\n"
+            "  type changes:          0\n"
+            "  nullability changes:   0\n"
+            "  requiredness changes:  0\n"
+        )
+
 
 class TestDetailsNumberOutput:
     def test_counts_and_lines_are_written_as_plain_integers(self, write_jsonl, tmp_path):
@@ -319,7 +370,10 @@ class TestDetailsNumberOutput:
 
         # Assert
         assert lines[1] == '{"key":[1],"old_line":1,"op":"deleted","type":"change"}'
-        assert lines[-1] == '{"added":1,"deleted":1,"equal":0,"modified":1,"type":"summary"}'
+        assert lines[-1] == (
+            '{"added":1,"deleted":1,"equal":0,"modified":1,'
+            '"new_duplicates":0,"old_duplicates":0,"type":"summary"}'
+        )
 
     @pytest.mark.parametrize(
         "value",
@@ -531,6 +585,66 @@ class TestDetailsOutput:
         ]
         assert records[-1]["old_duplicates"] == 2
         assert records[-1]["new_duplicates"] == 0
+
+    def test_schema_events_follow_meta_and_precede_record_changes(
+        self,
+        write_jsonl,
+        tmp_path,
+        capsys,
+    ):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [
+                {"id": 1, "age": 36, "email": None},
+                {"id": 2, "age": 41, "email": "alan@example.com"},
+            ],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [
+                {"id": 1, "age": "36", "email": "ada@example.com", "country": "ES"},
+                {"id": 2, "age": "41", "country": "UK"},
+            ],
+        )
+        details = tmp_path / "changes.jsonl"
+
+        # Act
+        exit_code = main(
+            [
+                str(old),
+                str(new),
+                "--key",
+                "id",
+                "--schema-diff",
+                "--details",
+                str(details),
+                "--quiet",
+            ],
+        )
+        records = [json.loads(line) for line in details.read_text(encoding="utf-8").splitlines()]
+
+        # Assert
+        assert exit_code == 1
+        assert capsys.readouterr() == ("", "")
+        assert records[0]["schema_diff"] is True
+        assert records[0]["schema_ignore"] == []
+        assert [(event["op"], event["path"]) for event in records[1:5]] == [
+            ("types_changed", "/age"),
+            ("field_added", "/country"),
+            ("nullability_changed", "/email"),
+            ("requiredness_changed", "/email"),
+        ]
+        assert records[1]["old"]["types"] == {"integer": 2}
+        assert records[1]["new"]["types"] == {"string": 2}
+        assert [event["type"] for event in records[5:7]] == ["change", "change"]
+        assert records[-1]["schema"] == {
+            "fields_added": 1,
+            "fields_removed": 0,
+            "types_changed": 1,
+            "nullability_changed": 1,
+            "requiredness_changed": 1,
+        }
 
 
 class TestQuietOutput:
