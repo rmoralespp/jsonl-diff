@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.2
+
 - **Added:** `--schema-diff` and `schema_diff=True` compare disk-backed observed
   field profiles, reporting added/removed fields and changes in types,
   nullability, and requiredness. `--schema-ignore` provides independent RFC
