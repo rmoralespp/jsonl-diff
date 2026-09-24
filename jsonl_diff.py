@@ -12,6 +12,8 @@ import warnings
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
+from json.encoder import encode_basestring as _encode_basestring
+from json.encoder import encode_basestring_ascii as _encode_basestring_ascii
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
@@ -23,6 +25,8 @@ Number = Union[Decimal, int, float]
 IdentityKey = Tuple[JsonScalar, ...]
 
 _MISSING = object()
+
+_DIGITS = ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
 
 # Avoid per-record filesystem scans: SQLite already enforces the main size limit.
 # Check periodically and once after each side finishes to catch extra temp/journal growth.
@@ -318,17 +322,22 @@ def _number(value: Number) -> str:
         return "0"
 
     sign, digits, exponent = value.as_tuple()
+    count = len(digits)
     trailing_zeros = 0
-    while len(digits) - trailing_zeros > 1 and digits[-trailing_zeros - 1] == 0:
+    while count - trailing_zeros > 1 and digits[count - trailing_zeros - 1] == 0:
         trailing_zeros += 1
+    if trailing_zeros:
+        digits = digits[:count - trailing_zeros]
+        exponent += trailing_zeros
+        count -= trailing_zeros
 
-    digits = digits[:-trailing_zeros] if trailing_zeros else digits
-    exponent += trailing_zeros
-    mantissa = str(digits[0])
-    if len(digits) > 1:
-        mantissa += "." + "".join(str(digit) for digit in digits[1:])
+    if count == 1:
+        mantissa = _DIGITS[digits[0]]
+    else:
+        text = "".join([_DIGITS[digit] for digit in digits])
+        mantissa = text[0] + "." + text[1:]
 
-    scientific_exponent = exponent + len(digits) - 1
+    scientific_exponent = exponent + count - 1
     return "{}{}e{:+d}".format("-" if sign else "", mantissa, scientific_exponent)
 
 
@@ -340,11 +349,43 @@ def _details_number(value: Number) -> str:
     return str(value).lower()
 
 
+def _digest_number(value: Number) -> str:
+    # Formats numbers for the content fingerprint only (hashed, never decoded or
+    # displayed), so it just needs value-consistent bytes. Ordinary-magnitude
+    # integrals use the fast plain-integer form; classifying by value keeps
+    # `1`, `1.0` and `1e0` identical. Fractions and huge integrals fall back to
+    # the exact scientific form and are never materialised as gigantic ints.
+    if type(value) is Decimal and value.adjusted() < 18 and value == value.to_integral_value():
+        return str(int(value))
+    return _number(value)
+
+
+def _require_str_key(name: Any) -> bool:
+    if isinstance(name, str):
+        return True
+    raise ValueError("JSON object property names must be strings")
+
+
 def _json_text(
     value: Any,
-    ensure_ascii: bool,
+    escape: Callable[[str], str],
     number: Callable[[Number], str],
 ) -> str:
+    # Checks are ordered by frequency for object-heavy payloads. String escaping
+    # is delegated to CPython's C-accelerated encoder (`escape`) rather than a
+    # per-value `json.dumps`.
+    kind = type(value)
+    if kind is str:
+        return escape(value)
+    if kind is dict:
+        members = [
+            escape(name) + ":" + _json_text(value[name], escape, number)
+            for name in sorted(value)
+            if type(name) is str or _require_str_key(name)
+        ]
+        return "{" + ",".join(members) + "}"
+    if kind is list or kind is tuple:
+        return "[" + ",".join([_json_text(item, escape, number) for item in value]) + "]"
     if value is None:
         return "null"
     if value is True:
@@ -354,33 +395,37 @@ def _json_text(
     if isinstance(value, (Decimal, int, float)):
         return number(value)
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=ensure_ascii)
+        return escape(value)
     if isinstance(value, (list, tuple)):
-        return "[{}]".format(",".join(_json_text(item, ensure_ascii, number) for item in value))
+        return "[" + ",".join([_json_text(item, escape, number) for item in value]) + "]"
     if isinstance(value, dict):
-        if any(not isinstance(name, str) for name in value):
-            raise ValueError("JSON object property names must be strings")
-        members = (
-            "{}:{}".format(
-                json.dumps(name, ensure_ascii=ensure_ascii),
-                _json_text(value[name], ensure_ascii, number),
-            )
+        members = [
+            escape(name) + ":" + _json_text(value[name], escape, number)
             for name in sorted(value)
-        )
-        return "{{{}}}".format(",".join(members))
+            if type(name) is str or _require_str_key(name)
+        ]
+        return "{" + ",".join(members) + "}"
     raise ValueError("unsupported JSON value type: {}".format(type(value).__name__))
 
 
 def _canonical_text(value: Any, ensure_ascii: bool = False) -> str:
-    return _json_text(value, ensure_ascii, _number)
+    escape = _encode_basestring_ascii if ensure_ascii else _encode_basestring
+    return _json_text(value, escape, _number)
 
 
 def _details_text(value: Any, ensure_ascii: bool = False) -> str:
-    return _json_text(value, ensure_ascii, _details_number)
+    escape = _encode_basestring_ascii if ensure_ascii else _encode_basestring
+    return _json_text(value, escape, _details_number)
 
 
 def _canonical(value: Any) -> bytes:
     return _canonical_text(value).encode("utf-8")
+
+
+def _content_canonical(value: Any) -> bytes:
+    # Bytes hashed for the content fingerprint. Uses the fast digest-only number
+    # formatter; identity encoding keeps `_canonical` so key notation round-trips.
+    return _json_text(value, _encode_basestring, _digest_number).encode("utf-8")
 
 
 def _fingerprint(canonical: bytes) -> Tuple[int, bytes]:
@@ -952,7 +997,7 @@ class DiffResult:
             try:
                 key = _identity(record, self.config.key)
                 normalized = _remove_ignored(record, self._ignore_tree)
-                canonical = _canonical(normalized)
+                canonical = _content_canonical(normalized)
                 identity = _canonical(list(key))
                 length, digest = _fingerprint(canonical)
             except (TypeError, ValueError) as error:

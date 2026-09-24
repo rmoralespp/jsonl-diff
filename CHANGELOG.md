@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Changed:** Speed up record canonicalization ~4x on large datasets by
+  escaping strings with CPython's C-accelerated encoder, rewriting the
+  canonical serializer with `type()` dispatch and list-comprehension joins, and
+  hashing integral content values in a faster form. Comparison results are
+  unchanged; identity and `--details` key notation still round-trip exactly.
+
 ## v0.1.2
 
 - **Added:** `--schema-diff` and `schema_diff=True` compare disk-backed observed
