@@ -82,12 +82,11 @@ Record order does not matter.
 * Exact **[RFC 6901](https://www.rfc-editor.org/info/rfc6901/)** JSON Pointer ignores.
 * Optional disk-backed observed-schema diff for fields, types, nullability, and requiredness.
 * Semantic number comparison using `Decimal`.
-* Optional `msgspec` accelerator for ~2x faster large diffs (`pip install "jsonl-diff[speedups]"`).
 * Deterministic summaries and change iteration.
 * Original OLD/NEW physical line numbers.
 * Machine-readable JSONL change log with `--details` ([format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md)).
 * Local, HTTP/HTTPS, file-like, and supported compressed sources.
-* Incremental top-level JSON array parsing with `--format json`.
+* Incremental parsing for JSONL/NDJSON by default, with support for top-level JSON arrays via `--format json`.
 * CLI and Python API using the same comparison engine.
 
 ## CLI
@@ -107,14 +106,14 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--key KEY`           | Required top-level identity field; repeat or comma-separate for composite keys |
 | `--ignore POINTER`    | RFC 6901 pointer to exclude from content comparison                            |
 | `--where EXPRESSION`  | JMESPath filter applied to each record                                         |
-| `--duplicates POLICY` | `error` (default), or select and report duplicates with `first`/`last`          |
-| `--missing-key POLICY`| `error` (default), or `null` to treat an absent identity field as `null`        |
+| `--duplicates POLICY` | `error` (default), or select and report duplicates with `first`/`last`         |
+| `--missing-key POLICY`| `error` (default), or `null` to treat an absent identity field as `null`       |
 | `--details FILE`      | Write deterministic machine-readable JSONL changes                             |
-| `--schema-diff`       | Compare observed fields, types, nullability, and requiredness                   |
-| `--schema-ignore`     | RFC 6901 pointer to exclude from observed-schema profiling                      |
+| `--schema-diff`       | Compare observed fields, types, nullability, and requiredness                  |
+| `--schema-ignore`     | RFC 6901 pointer to exclude from observed-schema profiling                     |
 | `--quiet`             | Suppress the normal summary                                                    |
 | `--max-temp BYTES`    | Best-effort budget for `jsonl-diff` workspace temporary storage                |
-| `--format FORMAT`     | Input format: `jsonl` (default) or a top-level JSON array with `json`       |
+| `--format FORMAT`     | Input format: `jsonl` (default) or a top-level JSON array with `json`          |
 
 Examples:
 
@@ -235,9 +234,7 @@ order, and canonical number formatting.
 ## Sources & compression
 
 Supported sources include local paths and HTTP/HTTPS URLs. The Python API
-also accepts file-like objects. JSON arrays use `py-jsonl.open_stream()` for
-the source and `ijson` for incremental parsing, so compression and remote
-source handling are shared with JSONL input.
+also accepts file-like objects.
 
 Supported compression:
 
@@ -247,7 +244,7 @@ Supported compression:
 * Zstandard on Python 3.14
 
 See [architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md) for the full source/compression
-support matrix and how sources are delegated to `py-jsonl`.
+support matrix and how sources are managed.
 
 ## Limitations
 
