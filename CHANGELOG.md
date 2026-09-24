@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.4
+
 * **Added:** `--missing-key {error,null}` and `missing_key=` control how missing identity fields are 
   handled. `error` (default) preserves the prior `InputError` behavior. `null` treats missing fields 
   like explicit `null`: allowed for composite identities
