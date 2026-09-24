@@ -7,6 +7,11 @@
   canonical serializer with `type()` dispatch and list-comprehension joins, and
   hashing integral content values in a faster form. Comparison results are
   unchanged; identity and `--details` key notation still round-trip exactly.
+- **Changed:** Speed up the disk-backed SQLite index phase. Records are written
+  in batched `executemany` inserts, the change summary is computed with a single
+  identity join plus range counts instead of correlated subqueries (~4x faster
+  read), and connection PRAGMAs are tuned for the transient workspace. Duplicate
+  detection, size limits, and results are unchanged.
 
 ## v0.1.2
 

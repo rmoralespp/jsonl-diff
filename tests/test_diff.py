@@ -568,6 +568,28 @@ class TestInputValidation:
         assert captured.value.lines == (1, 3)
         assert captured.value.source == "OLD"
 
+    def test_duplicate_identity_is_detected_across_insert_batches(self, write_jsonl):
+        # A duplicate whose two occurrences are separated by more than one
+        # insert batch must still report the exact first and duplicate physical
+        # lines, exercising the batched-insert cleanup-and-replay path.
+        import jsonl_diff
+
+        span = jsonl_diff._INSERT_BATCH + 500
+        records = [{"id": index + 100_000} for index in range(span)]
+        records[-1] = {"id": 100_000}
+        old = write_jsonl("old.jsonl", records)
+        new = write_jsonl("new.jsonl", [])
+
+        # Act
+        with pytest.raises(DuplicateKeyError) as captured:
+            with diff(old, new, key="id"):
+                pass
+
+        # Assert
+        assert captured.value.key == (Decimal(100_000),)
+        assert captured.value.lines == (1, span)
+        assert captured.value.source == "OLD"
+
     @pytest.mark.parametrize(
         "policy,expected",
         [

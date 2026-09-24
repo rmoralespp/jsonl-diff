@@ -31,6 +31,8 @@ _DIGITS = ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
 # Avoid per-record filesystem scans: SQLite already enforces the main size limit.
 # Check periodically and once after each side finishes to catch extra temp/journal growth.
 _SIZE_CHECK_INTERVAL = 1024
+# Records are inserted in batches to amortize per-statement overhead.
+_INSERT_BATCH = 2048
 _SCHEMA_TYPE_INDEXES = {
     "boolean": 3,
     "integer": 4,
@@ -606,11 +608,17 @@ class DiffResult:
 
     def _configure_database(self) -> None:
         self._connection.execute("PRAGMA journal_mode = OFF")
+        self._connection.execute("PRAGMA synchronous = OFF")
         self._connection.execute("PRAGMA temp_store = FILE")
         if self.config.max_temp is not None:
             pages = max(1, self.config.max_temp // 4096)
             self._connection.execute("PRAGMA page_size = 4096")
             self._connection.execute("PRAGMA max_page_count = {}".format(pages))
+        else:
+            # A larger page cache speeds bulk index writes and the summary read.
+            # Skipped under max_temp so on-disk growth stays observable and the
+            # workspace memory footprint remains bounded.
+            self._connection.execute("PRAGMA cache_size = -65536")
 
     def _create_schema(self) -> None:
         self._connection.execute(
@@ -972,6 +980,7 @@ class DiffResult:
         cursor = self._connection.cursor()
         schema_fields = {}
         schema_objects = {}
+        pending = []
         for line, record in enumerate(records, start=1):
             if not isinstance(record, dict):
                 raise InputError("each record must be a JSON object", source, line)
@@ -984,6 +993,8 @@ class DiffResult:
                     if (
                         self.config.schema_diff or self.config.max_temp is not None
                     ) and line % _SIZE_CHECK_INTERVAL == 0:
+                        if pending:
+                            self._flush_record_batch(cursor, pending, source)
                         if self.config.schema_diff:
                             self._flush_schema_profile(
                                 cursor,
@@ -1014,16 +1025,9 @@ class DiffResult:
                     raise InputError(str(error), source, line) from error
             values = (side, identity, line, length, digest)
             if self.config.duplicates == DuplicatePolicy.ERROR:
-                try:
-                    cursor.execute("INSERT INTO records VALUES (?, ?, ?, ?, ?)", values)
-                except sqlite3.IntegrityError as error:
-                    first = cursor.execute(
-                        "SELECT line FROM records WHERE side = ? AND identity = ?",
-                        (side, identity),
-                    ).fetchone()[0]
-                    raise DuplicateKeyError(key, source, (first, line)) from error
-                except sqlite3.DatabaseError as error:
-                    raise ResourceError("could not write the temporary index") from error
+                pending.append(values)
+                if len(pending) >= _INSERT_BATCH:
+                    self._flush_record_batch(cursor, pending, source)
             else:
                 try:
                     self._insert_tolerated_record(cursor, values)
@@ -1032,13 +1036,51 @@ class DiffResult:
             if (
                 self.config.schema_diff or self.config.max_temp is not None
             ) and line % _SIZE_CHECK_INTERVAL == 0:
+                if pending:
+                    self._flush_record_batch(cursor, pending, source)
                 if self.config.schema_diff:
                     self._flush_schema_profile(cursor, side, schema_fields, schema_objects)
                 if self.config.max_temp is not None:
                     self._check_size()
+        if pending:
+            self._flush_record_batch(cursor, pending, source)
         if self.config.schema_diff:
             self._flush_schema_profile(cursor, side, schema_fields, schema_objects)
         self._check_size()
+
+    @staticmethod
+    def _flush_record_batch(
+        cursor: sqlite3.Cursor,
+        pending: list,
+        source: str,
+    ) -> None:
+        try:
+            cursor.executemany("INSERT INTO records VALUES (?, ?, ?, ?, ?)", pending)
+        except sqlite3.IntegrityError:
+            # A duplicate identity exists within this batch or against a
+            # previously inserted row. Undo this batch's partial inserts (each
+            # row has a unique physical line, so this can never remove an earlier
+            # row) and replay row by row to report the exact colliding identity
+            # and its first physical line, matching the per-record behavior.
+            cursor.executemany(
+                "DELETE FROM records WHERE side = ? AND identity = ? AND line = ?",
+                [(row[0], row[1], row[2]) for row in pending],
+            )
+            for row in pending:
+                try:
+                    cursor.execute("INSERT INTO records VALUES (?, ?, ?, ?, ?)", row)
+                except sqlite3.IntegrityError as error:
+                    first = cursor.execute(
+                        "SELECT line FROM records WHERE side = ? AND identity = ?",
+                        (row[0], row[1]),
+                    ).fetchone()[0]
+                    key = tuple(_decode_json(row[1].decode("utf-8")))
+                    raise DuplicateKeyError(key, source, (first, row[2])) from error
+            pending.clear()
+        except sqlite3.DatabaseError as error:
+            raise ResourceError("could not write the temporary index") from error
+        else:
+            pending.clear()
 
     @staticmethod
     def _flush_schema_profile(
@@ -1111,43 +1153,48 @@ class DiffResult:
             )
 
     def _calculate_summary(self) -> Summary:
+        # Derive the four record totals from a single identity join (matched
+        # pairs, plus how many of them are content-equal) and two per-side range
+        # counts, instead of running the join twice and two anti-joins. Every
+        # access uses the (side, identity) primary key, and the arithmetic below
+        # recovers added/deleted/modified without extra scans.
         row = self._connection.execute(
             """
             SELECT
-                (SELECT COUNT(*)
-                 FROM records AS o JOIN records AS n USING (identity)
-                 WHERE o.side = 0 AND n.side = 1
-                   AND o.length = n.length
-                   AND o.digest = n.digest),
-                (SELECT COUNT(*)
-                 FROM records AS n
-                 WHERE n.side = 1 AND NOT EXISTS (
-                     SELECT 1 FROM records AS o
-                     WHERE o.side = 0 AND o.identity = n.identity
-                 )),
-                (SELECT COUNT(*)
-                 FROM records AS o
-                 WHERE o.side = 0 AND NOT EXISTS (
-                     SELECT 1 FROM records AS n
-                     WHERE n.side = 1 AND n.identity = o.identity
-                 )),
-                (SELECT COUNT(*)
-                 FROM records AS o JOIN records AS n USING (identity)
-                 WHERE o.side = 0 AND n.side = 1
-                   AND (
-                       o.length != n.length
-                       OR o.digest != n.digest
-                   )),
-                (SELECT COUNT(*)
-                 FROM duplicate_records
-                 WHERE side = 0),
-                (SELECT COUNT(*)
-                 FROM duplicate_records
-                 WHERE side = 1)
+                (SELECT COUNT(*) FROM records WHERE side = 0),
+                (SELECT COUNT(*) FROM records WHERE side = 1),
+                matches.matched,
+                matches.equal,
+                (SELECT COUNT(*) FROM duplicate_records WHERE side = 0),
+                (SELECT COUNT(*) FROM duplicate_records WHERE side = 1)
+            FROM (
+                SELECT
+                    COUNT(*) AS matched,
+                    COALESCE(
+                        SUM(o.length = n.length AND o.digest = n.digest), 0
+                    ) AS equal
+                FROM records AS o
+                JOIN records AS n
+                  ON o.side = 0 AND n.side = 1 AND o.identity = n.identity
+            ) AS matches
             """,
         ).fetchone()
+        total_old, total_new, matched, equal, old_dups, new_dups = (
+            int(value or 0) for value in row
+        )
+        added = total_new - matched
+        deleted = total_old - matched
+        modified = matched - equal
         schema = self._calculate_schema_summary() if self.config.schema_diff else None
-        return Summary(*(int(value or 0) for value in row), schema=schema)
+        return Summary(
+            equal,
+            added,
+            deleted,
+            modified,
+            old_dups,
+            new_dups,
+            schema=schema,
+        )
 
     def _calculate_schema_summary(self) -> SchemaSummary:
         counts = dict.fromkeys(SchemaChangeOperation, 0)
