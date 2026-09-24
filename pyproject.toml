@@ -29,7 +29,8 @@ classifiers = [
     "Topic :: File Formats :: JSON",
 ]
 dependencies = [
-    "py-jsonl==1.5.2",
+    "ijson>=3.2",
+    "py-jsonl==1.5.3",
     "jmespath>=1.0.0",
 ]
 

@@ -76,6 +76,9 @@ warnings rather than replacing the primary error.
 
 Source opening and decompression are delegated to
 [`py-jsonl`](https://github.com/rmoralespp/jsonl).
+JSONL input is decoded by `py-jsonl`; `--format json` opens the same
+decompressed byte stream with `py-jsonl.open_stream()` and parses top-level
+array elements incrementally with `ijson`.
 
 | Source             |       CLI        |           Python API            |
 |---------------------|:----------------:|:--------------------------------:|
@@ -91,4 +94,5 @@ Source opening and decompression are delegated to
 Zstandard availability follows `py-jsonl` and its use of Python 3.14's
 standard-library zstd support; it is not supported by this project on earlier
 Python versions. Compression and HTTP transfer boundaries do not affect the
-reported decoded JSONL line numbers.
+reported decoded JSONL line numbers. For `--format json`, the corresponding
+locations are one-based array-element ordinals rather than physical lines.

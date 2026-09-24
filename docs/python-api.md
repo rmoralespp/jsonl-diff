@@ -20,6 +20,7 @@ with diff(
         max_temp=2_000_000_000,
         schema_diff=True,
         schema_ignore=("/metadata",),
+        format="jsonl",
 ) as result:
     print(result.summary)
 
@@ -49,6 +50,7 @@ def diff(
         max_temp: Optional[int] = None,
         schema_diff: bool = False,
         schema_ignore: Sequence[str] = (),
+        format: str = "jsonl",
 ) -> DiffResult:
     ...
 ```
@@ -57,6 +59,11 @@ def diff(
 its context fully reads, indexes, and validates both sources before exposing
 the result. `DiffResult.changes()` is then a lazy iterator over the disk-backed
 result rather than a list held in memory.
+
+`format="jsonl"` (the default) reads one JSON object per line. Use
+`format="json"` for sources containing one top-level JSON array; its elements
+are parsed incrementally with `ijson`. Both formats support the same local,
+remote, compressed, and file-like sources.
 
 Using `DiffResult` as a context manager is required. It owns the temporary
 resources and removes its private workspace on exit. A result cannot be entered

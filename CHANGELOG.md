@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Added:** Top-level JSON array input with `--format json` and
+  `format="json"`, parsed incrementally with `ijson` through
+  `py-jsonl.open_stream()`. JSONL remains the default format.
+
 ## v0.1.3
 
 * **Added:** Optional `msgspec` accelerator (`pip install jsonl-diff[speedups]`, Python 3.10+) for C-based decoding 

@@ -82,6 +82,83 @@ class TestStreamSources:
         # Assert
         assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
 
+    def test_json_array_file_like_sources_are_supported(self):
+        # Arrange
+        old = io.BytesIO(b'[{"id":1,"value":"same"}]')
+        new = io.BytesIO(b'[{"value":"same","id":1}]')
+
+        # Act
+        with diff(old, new, key="id", format="json") as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+        assert not old.closed
+        assert not new.closed
+
+
+class TestJsonArraySources:
+    def test_json_arrays_are_streamed_incrementally(self, tmp_path):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1,"value":"same"},{"id":2}]', encoding="utf-8")
+        new.write_text('[{"id":2},{"id":3}]', encoding="utf-8")
+
+        # Act
+        with diff(old, new, key="id", format="json") as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=1, added=1, deleted=1, modified=0)
+
+    @pytest.mark.parametrize(
+        "suffix,writer",
+        [
+            (".json.gz", _write_gzip),
+            (".json.bz2", _write_bzip2),
+            (".json.xz", _write_xz),
+        ],
+    )
+    def test_compressed_json_arrays_are_supported(self, tmp_path, suffix, writer):
+        # Arrange
+        old = tmp_path / ("old" + suffix)
+        new = tmp_path / ("new" + suffix)
+        writer(old, b'[{"id":1,"value":"same"}]')
+        writer(new, b'[{"value":"same","id":1}]')
+
+        # Act
+        with diff(old, new, key="id", format="json") as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+
+    def test_json_format_rejects_non_array_documents(self, tmp_path):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('{"id":1}', encoding="utf-8")
+        new.write_text("[]", encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(InputError, match="invalid input"):
+            with diff(old, new, key="id", format="json"):
+                pass
+
+    @pytest.mark.parametrize("content", ['[{"id":1}', '[{"id":1}] trailing'])
+    def test_json_format_rejects_malformed_documents(self, tmp_path, content):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text(content, encoding="utf-8")
+        new.write_text("[]", encoding="utf-8")
+
+        # Act / Assert
+        with pytest.raises(InputError, match="invalid input"):
+            with diff(old, new, key="id", format="json"):
+                pass
+
 
 class _SilentHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, message, *args):
@@ -107,6 +184,35 @@ class TestHttpSources:
                 "http://127.0.0.1:{}/old.jsonl".format(port),
                 "http://127.0.0.1:{}/new.jsonl".format(port),
                 key="id",
+            ) as result:
+                summary = result.summary
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join()
+
+        # Assert
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+
+    def test_http_json_array_sources_are_supported(self, tmp_path):
+        # Arrange
+        old = tmp_path / "old.json"
+        old.write_text('[{"id":1,"value":"same"}]', encoding="utf-8")
+        new = tmp_path / "new.json"
+        new.write_text('[{"value":"same","id":1}]', encoding="utf-8")
+        handler = functools.partial(_SilentHandler, directory=str(tmp_path))
+        server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+
+        # Act
+        try:
+            port = server.server_address[1]
+            with diff(
+                "http://127.0.0.1:{}/old.json".format(port),
+                "http://127.0.0.1:{}/new.json".format(port),
+                key="id",
+                format="json",
             ) as result:
                 summary = result.summary
         finally:

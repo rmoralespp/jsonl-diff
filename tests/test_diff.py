@@ -19,6 +19,65 @@ from jsonl_diff import (
 
 
 class TestDiffSummary:
+    def test_json_array_format_compares_array_elements(self, tmp_path):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1,"value":"before"}]', encoding="utf-8")
+        new.write_text('[{"id":1,"value":"after"}]', encoding="utf-8")
+
+        # Act
+        with diff(old, new, key="id", format="json") as result:
+            change = next(result.changes())
+
+        # Assert
+        assert change.operation == ChangeOperation.MODIFIED
+
+    def test_json_array_numbers_use_jsonl_numeric_semantics(self, tmp_path):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1,"value":1}]', encoding="utf-8")
+        new.write_text('[{"id":1.0,"value":1e0}]', encoding="utf-8")
+
+        # Act
+        with diff(old, new, key="id", format="json") as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+
+    def test_json_array_locations_are_one_based_element_ordinals(self, tmp_path):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1},{"id":2}]', encoding="utf-8")
+        new.write_text('[{"id":1},{"id":3}]', encoding="utf-8")
+
+        # Act
+        with diff(old, new, key="id", format="json") as result:
+            changes = list(result.changes())
+
+        # Assert
+        assert [(change.operation, change.old_line, change.new_line) for change in changes] == [
+            (ChangeOperation.DELETED, 2, None),
+            (ChangeOperation.ADDED, None, 2),
+        ]
+
+    def test_json_array_duplicate_locations_are_element_ordinals(self, tmp_path):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1},{"id":1}]', encoding="utf-8")
+        new.write_text('[{"id":1}]', encoding="utf-8")
+
+        # Act
+        with diff(old, new, key="id", format="json", duplicates="first") as result:
+            duplicate = next(result.duplicates())
+
+        # Assert
+        assert (duplicate.selected_line, duplicate.discarded_line) == (1, 2)
+
     def test_records_in_different_physical_order_are_classified_by_identity(self, write_jsonl):
         # Arrange
         old = write_jsonl(

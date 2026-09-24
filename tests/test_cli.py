@@ -1,5 +1,6 @@
 import io
 import json
+import types
 from decimal import Decimal
 
 import pytest
@@ -26,6 +27,36 @@ def _different_sources(write_jsonl):
 
 
 class TestCliExitCodes:
+    def test_json_format_compares_array_inputs(self, tmp_path, capsys):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1}]', encoding="utf-8")
+        new.write_text('[{"id":1},{"id":2}]', encoding="utf-8")
+
+        # Act
+        exit_code = main([str(old), str(new), "--key", "id", "--format", "json"])
+        captured = capsys.readouterr()
+
+        # Assert
+        assert exit_code == 1
+        assert "added:     1" in captured.out
+
+    def test_json_format_reads_stdin(self, tmp_path, monkeypatch, capsys):
+        # Arrange
+        new = tmp_path / "new.json"
+        new.write_text('[{"id":1}]', encoding="utf-8")
+        stdin = types.SimpleNamespace(buffer=io.BytesIO(b'[{"id":1},{"id":2}]'))
+        monkeypatch.setattr(jsonl_diff.sys, "stdin", stdin)
+
+        # Act
+        exit_code = main(["-", str(new), "--key", "id", "--format", "json"])
+        captured = capsys.readouterr()
+
+        # Assert
+        assert exit_code == 1
+        assert "deleted:   1" in captured.out
+
     def test_equal_inputs_return_zero(self, write_jsonl, capsys):
         # Arrange
         old = write_jsonl("old.jsonl", [{"id": 1}])

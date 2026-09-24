@@ -8,8 +8,9 @@
   <img src="https://img.shields.io/github/license/rmoralespp/jsonl-diff.svg" alt="License">
 </p>
 
-A lightweight, pure-Python tool for comparing large [JSONL](https://jsonlines.org/)/[NDJSON](https://github.com/ndjson/ndjson-spec) datasets **by record identity instead of line
-position**, without loading the complete inputs into memory.
+A lightweight, pure-Python tool for comparing large JSONL/NDJSON datasets and
+top-level JSON arrays **by record identity instead of line position**, without
+loading the complete inputs into memory.
 
 `jsonl-diff` matches records using one or more top-level fields and reports:
 `equal`, `added`, `deleted`, `modified`, and tolerated duplicates in each source.
@@ -86,6 +87,7 @@ Record order does not matter.
 * Original OLD/NEW physical line numbers.
 * Machine-readable JSONL change log with `--details` ([format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md)).
 * Local, HTTP/HTTPS, file-like, and supported compressed sources.
+* Incremental top-level JSON array parsing with `--format json`.
 * CLI and Python API using the same comparison engine.
 
 ## CLI
@@ -94,6 +96,7 @@ Record order does not matter.
 jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
            [--duplicates {error,first,last}] [--details FILE] [--quiet]
            [--schema-diff] [--schema-ignore POINTER] [--max-temp MAX_TEMP]
+           [--format {jsonl,json}]
            old new
 ```
 
@@ -109,6 +112,7 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--schema-ignore`     | RFC 6901 pointer to exclude from observed-schema profiling                      |
 | `--quiet`             | Suppress the normal summary                                                    |
 | `--max-temp BYTES`    | Best-effort budget for `jsonl-diff` workspace temporary storage                |
+| `--format FORMAT`     | Input format: `jsonl` (default) or a top-level JSON array with `json`       |
 
 Examples:
 
@@ -135,6 +139,9 @@ jsonl-diff old.jsonl new.jsonl \
 
 # Compressed input
 jsonl-diff old.jsonl.xz new.jsonl.gz --key id
+
+# Top-level JSON arrays (parsed incrementally)
+jsonl-diff old.json new.json --key id --format json
 ```
 
 ### Exit codes
@@ -195,7 +202,10 @@ signature, result models, `Decimal` key semantics, and error hierarchy.
 
 `jsonl-diff` is intentionally strict:
 
-* Every input line must contain exactly one valid top-level JSON object.
+* In the default `jsonl` format, every input line must contain exactly one
+  valid top-level JSON object.
+* With `--format json`, each input must be one top-level JSON array whose
+  elements are the records.
 * Blank lines, malformed JSON, `NaN`, and infinities are rejected.
 * Duplicate object property names within a record follow JSON's last-wins semantics: the last occurrence is kept.
 * Identity fields must be top-level scalar values (`null` allowed only as one component of a composite key).
@@ -218,7 +228,9 @@ order, and canonical number formatting.
 ## Sources & compression
 
 Supported sources include local paths and HTTP/HTTPS URLs. The Python API
-also accepts file-like objects.
+also accepts file-like objects. JSON arrays use `py-jsonl.open_stream()` for
+the source and `ijson` for incremental parsing, so compression and remote
+source handling are shared with JSONL input.
 
 Supported compression:
 

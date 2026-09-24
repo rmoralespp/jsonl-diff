@@ -17,6 +17,7 @@ from json.encoder import encode_basestring_ascii as _encode_basestring_ascii
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
+import ijson
 import jmespath
 import jsonl
 
@@ -262,6 +263,7 @@ class DiffConfig:
     where_expression: Any = None
     schema_diff: bool = False
     schema_ignore: Tuple[str, ...] = ()
+    format: str = "jsonl"
 
 
 @dataclass(frozen=True)
@@ -603,10 +605,36 @@ def _compile_where(expression: str) -> Any:
         ) from error
 
 
+def _normalize_array_numbers(value: Any) -> Any:
+    if isinstance(value, Decimal) and not isinstance(value, _Num):
+        return _Num(value)
+    if isinstance(value, list):
+        return [_normalize_array_numbers(item) for item in value]
+    if isinstance(value, dict):
+        return {name: _normalize_array_numbers(item) for name, item in value.items()}
+    return value
+
+
+def _array_records(source: Any) -> Iterator[Any]:
+    with jsonl.open_stream(source) as stream:
+        events = ijson.parse(stream, use_float=False)
+        try:
+            prefix, event, _value = next(events)
+        except StopIteration:
+            raise ValueError("empty JSON input") from None
+        if (prefix, event) != ("", "start_array"):
+            raise ValueError("expected a top-level JSON array")
+        for record in ijson.items(events, "item"):
+            yield _normalize_array_numbers(record)
+
+
 if _msgspec is not None:
     _INPUT_DECODER = _msgspec.json.Decoder(float_hook=_Num)
 
-    def _records(source: Any, on_error: Any) -> Iterator[Any]:
+    def _records(source: Any, on_error: Any, input_format: str) -> Iterator[Any]:
+        if input_format == "json":
+            yield from _array_records(source)
+            return
         # msgspec decodes input lines ~2.6x faster than the stdlib parser and
         # rejects NaN/Infinity natively. Floats become `_Num` (a Decimal subclass)
         # while integers stay native `int`; both are handled by the number
@@ -614,7 +642,10 @@ if _msgspec is not None:
         # matching the pure-Python fallback below.
         yield from jsonl.load(source, cls=_INPUT_DECODER.decode, _on_error=on_error)
 else:
-    def _records(source: Any, on_error: Any) -> Iterator[Any]:
+    def _records(source: Any, on_error: Any, input_format: str) -> Iterator[Any]:
+        if input_format == "json":
+            yield from _array_records(source)
+            return
         # No object_pairs_hook is installed, so duplicate object keys follow the
         # stdlib parser's last-wins semantics, matching the msgspec path above.
         yield from jsonl.load(
@@ -1176,10 +1207,10 @@ class DiffResult:
 
         try:
             with self._connection:
-                self._insert_records(_records(source, on_error), side, name)
+                self._insert_records(_records(source, on_error, self.config.format), side, name)
         except JsonlDiffError:
             raise
-        except (OSError, EOFError, ValueError, RuntimeError) as error:
+        except (OSError, EOFError, ValueError, RuntimeError, ijson.JSONError) as error:
             line = error_line[0]
             message = "invalid input ({})".format(type(error).__name__)
             raise InputError(message, name, line) from error
@@ -1264,6 +1295,7 @@ def _configuration(
     max_temp: Optional[int],
     schema_diff: bool,
     schema_ignore: Sequence[str],
+    input_format: str,
 ) -> DiffConfig:
     keys = (key,) if isinstance(key, str) else tuple(key)
     if not keys or any(not isinstance(name, str) or not name for name in keys):
@@ -1287,6 +1319,8 @@ def _configuration(
         and (not isinstance(max_temp, int) or isinstance(max_temp, bool) or max_temp <= 0)
     ):
         raise ConfigurationError("max_temp must be a positive integer")
+    if input_format not in ("jsonl", "json"):
+        raise ConfigurationError("invalid format {!r}".format(input_format))
     return DiffConfig(
         key=keys,
         ignore=ignores,
@@ -1296,6 +1330,7 @@ def _configuration(
         where_expression=where_expression,
         schema_diff=schema_diff,
         schema_ignore=schema_ignores,
+        format=input_format,
     )
 
 
@@ -1310,6 +1345,7 @@ def diff(
     max_temp: Optional[int] = None,
     schema_diff: bool = False,
     schema_ignore: Sequence[str] = (),
+    format: str = "jsonl",  # noqa: A002
 ) -> DiffResult:
     """Create a context-managed, disk-backed comparison."""
     config = _configuration(
@@ -1320,6 +1356,7 @@ def diff(
         max_temp,
         schema_diff,
         schema_ignore,
+        format,
     )
     return DiffResult(old, new, config)
 
@@ -1459,6 +1496,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--schema-ignore", action="append", default=[], metavar="POINTER")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--max-temp", type=int)
+    parser.add_argument("--format", choices=("jsonl", "json"), default="jsonl")
     return parser
 
 
@@ -1473,6 +1511,7 @@ def _run_comparison(arguments: argparse.Namespace, old: Any, new: Any, keys: Tup
         max_temp=arguments.max_temp,
         schema_diff=arguments.schema_diff,
         schema_ignore=arguments.schema_ignore,
+        format=arguments.format,
     ) as result:
         if arguments.details:
             _write_details(result, arguments.details)
