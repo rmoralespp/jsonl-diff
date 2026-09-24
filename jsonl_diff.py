@@ -119,6 +119,13 @@ class DuplicatePolicy(str, Enum):
     LAST = "last"
 
 
+class MissingKeyPolicy(str, Enum):
+    """How an absent identity field is handled."""
+
+    ERROR = "error"
+    NULL = "null"
+
+
 class SchemaChangeOperation(str, Enum):
     """An observed schema change classification."""
 
@@ -264,6 +271,7 @@ class DiffConfig:
     schema_diff: bool = False
     schema_ignore: Tuple[str, ...] = ()
     format: str = "jsonl"
+    missing_key: MissingKeyPolicy = MissingKeyPolicy.ERROR
 
 
 @dataclass(frozen=True)
@@ -576,13 +584,20 @@ def _remove_ignored(value: Any, tree: Dict[str, Any]) -> Any:
     return result
 
 
-def _identity(record: Dict[str, Any], keys: Sequence[str]) -> IdentityKey:
+def _identity(
+    record: Dict[str, Any],
+    keys: Sequence[str],
+    missing_key: MissingKeyPolicy = MissingKeyPolicy.ERROR,
+) -> IdentityKey:
     composite = len(keys) > 1
     values = []
     for name in keys:
         if name not in record:
-            raise ValueError("missing identity field {!r}".format(name))
-        value = record[name]
+            if missing_key != MissingKeyPolicy.NULL:
+                raise ValueError("missing identity field {!r}".format(name))
+            value = None
+        else:
+            value = record[name]
         if value is None:
             # Composite identities may contain null components; uniqueness is
             # still enforced on the complete identity tuple. A single-field
@@ -1084,7 +1099,7 @@ class DiffResult:
                             self._check_size()
                     continue
             try:
-                key = _identity(record, self.config.key)
+                key = _identity(record, self.config.key, self.config.missing_key)
                 normalized = _remove_ignored(record, self._ignore_tree)
                 canonical = _content_canonical(normalized)
                 identity = _canonical(list(key))
@@ -1296,6 +1311,7 @@ def _configuration(
     schema_diff: bool,
     schema_ignore: Sequence[str],
     input_format: str,
+    missing_key: Union[str, MissingKeyPolicy] = MissingKeyPolicy.ERROR,
 ) -> DiffConfig:
     keys = (key,) if isinstance(key, str) else tuple(key)
     if not keys or any(not isinstance(name, str) or not name for name in keys):
@@ -1314,6 +1330,12 @@ def _configuration(
         duplicate_policy = DuplicatePolicy(duplicates)
     except ValueError as error:
         raise ConfigurationError("invalid duplicate policy {!r}".format(duplicates)) from error
+    try:
+        missing_key_policy = MissingKeyPolicy(missing_key)
+    except ValueError as error:
+        raise ConfigurationError(
+            "invalid missing-key policy {!r}".format(missing_key),
+        ) from error
     if (
         max_temp is not None
         and (not isinstance(max_temp, int) or isinstance(max_temp, bool) or max_temp <= 0)
@@ -1326,6 +1348,7 @@ def _configuration(
         ignore=ignores,
         where=where,
         duplicates=duplicate_policy,
+        missing_key=missing_key_policy,
         max_temp=max_temp,
         where_expression=where_expression,
         schema_diff=schema_diff,
@@ -1342,6 +1365,7 @@ def diff(
     ignore: Sequence[str] = (),
     where: Optional[str] = None,
     duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
+    missing_key: Union[str, MissingKeyPolicy] = MissingKeyPolicy.ERROR,
     max_temp: Optional[int] = None,
     schema_diff: bool = False,
     schema_ignore: Sequence[str] = (),
@@ -1357,6 +1381,7 @@ def diff(
         schema_diff,
         schema_ignore,
         format,
+        missing_key,
     )
     return DiffResult(old, new, config)
 
@@ -1445,6 +1470,7 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
             "ignore": list(result.config.ignore),
             "where": result.config.where,
             "duplicates": result.config.duplicates.value,
+            "missing_key": result.config.missing_key.value,
         }
         if result.config.schema_diff:
             metadata["schema_diff"] = True
@@ -1491,6 +1517,11 @@ def _parser() -> argparse.ArgumentParser:
         choices=tuple(policy.value for policy in DuplicatePolicy),
         default=DuplicatePolicy.ERROR.value,
     )
+    parser.add_argument(
+        "--missing-key",
+        choices=tuple(policy.value for policy in MissingKeyPolicy),
+        default=MissingKeyPolicy.ERROR.value,
+    )
     parser.add_argument("--details", metavar="FILE")
     parser.add_argument("--schema-diff", action="store_true")
     parser.add_argument("--schema-ignore", action="append", default=[], metavar="POINTER")
@@ -1508,6 +1539,7 @@ def _run_comparison(arguments: argparse.Namespace, old: Any, new: Any, keys: Tup
         ignore=arguments.ignore,
         where=arguments.where,
         duplicates=arguments.duplicates,
+        missing_key=arguments.missing_key,
         max_temp=arguments.max_temp,
         schema_diff=arguments.schema_diff,
         schema_ignore=arguments.schema_ignore,

@@ -35,6 +35,12 @@ identity; a `null` value is only tolerated as one component of a composite
 identity tuple, so a tuple containing only `null` values can still collide.
 Nested identity paths and automatic key detection are not supported.
 
+By default, a record missing a configured identity field aborts the comparison with `InputError`. 
+Set `missing_key="null"` (`--missing-key null` on the CLI) to treat missing fields like explicit `null`: allowed 
+composite identities but subject to collision risk (`DuplicateKeyError`/duplicate-policy handling), and rejected 
+single-field identities for the same reason as explicit `null`.
+
+
 Composite identity field names are sorted lexically before their values are
 extracted. Consequently, `key=("b", "a")` and `key=("a", "b")` both produce
 keys in `(a, b)` order and match identically. Repeated or empty identity-field

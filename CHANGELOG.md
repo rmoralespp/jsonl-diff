@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Added:** `--missing-key {error,null}` and `missing_key=` control how missing identity fields are 
+  handled. `error` (default) preserves the prior `InputError` behavior. `null` treats missing fields 
+  like explicit `null`: allowed for composite identities
+
 * **Added:** Top-level JSON array input with `--format json` and
   `format="json"`, parsed incrementally with `ijson` through
   `py-jsonl.open_stream()`. JSONL remains the default format.

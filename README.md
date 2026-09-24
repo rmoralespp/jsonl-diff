@@ -94,7 +94,8 @@ Record order does not matter.
 
 ```text
 jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
-           [--duplicates {error,first,last}] [--details FILE] [--quiet]
+           [--duplicates {error,first,last}] [--missing-key {error,null}]
+           [--details FILE] [--quiet]
            [--schema-diff] [--schema-ignore POINTER] [--max-temp MAX_TEMP]
            [--format {jsonl,json}]
            old new
@@ -107,6 +108,7 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--ignore POINTER`    | RFC 6901 pointer to exclude from content comparison                            |
 | `--where EXPRESSION`  | JMESPath filter applied to each record                                         |
 | `--duplicates POLICY` | `error` (default), or select and report duplicates with `first`/`last`          |
+| `--missing-key POLICY`| `error` (default), or `null` to treat an absent identity field as `null`        |
 | `--details FILE`      | Write deterministic machine-readable JSONL changes                             |
 | `--schema-diff`       | Compare observed fields, types, nullability, and requiredness                   |
 | `--schema-ignore`     | RFC 6901 pointer to exclude from observed-schema profiling                      |
@@ -130,6 +132,11 @@ jsonl-diff old.jsonl new.jsonl \
 jsonl-diff old.jsonl new.jsonl \
   --key id \
   --where 'deleted_at == `null`'
+
+# Tolerate an identity field that is absent from some records
+jsonl-diff old.jsonl new.jsonl \
+  --key country,customerId \
+  --missing-key null
 
 # Detect observed schema drift
 jsonl-diff old.jsonl new.jsonl \

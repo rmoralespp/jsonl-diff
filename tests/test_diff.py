@@ -11,6 +11,7 @@ from jsonl_diff import (
     DuplicateKeyError,
     DuplicatePolicy,
     InputError,
+    MissingKeyPolicy,
     SchemaChangeOperation,
     SchemaSummary,
     Summary,
@@ -624,6 +625,67 @@ class TestInputValidation:
 
         # Assert
         assert summary == Summary(added=0, deleted=0, equal=1, modified=1)
+
+    def test_missing_identity_field_defaults_to_error(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"value": "old"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "value": "new"}])
+
+        # Act / Assert
+        with pytest.raises(InputError, match="missing identity field"):
+            with diff(old, new, key="id"):
+                pass
+
+    def test_missing_key_null_policy_treats_absent_field_as_null(self, write_jsonl):
+        # Arrange: "b" is absent from OLD and explicitly null in NEW; with the
+        # "null" policy both are treated as the same composite identity.
+        old = write_jsonl("old.jsonl", [{"a": 1, "value": "old"}])
+        new = write_jsonl("new.jsonl", [{"a": 1, "b": None, "value": "new"}])
+
+        # Act
+        with diff(old, new, key=("a", "b"), missing_key=MissingKeyPolicy.NULL) as result:
+            change = next(result.changes())
+
+        # Assert
+        assert change.key == (Decimal("1"), None)
+        assert change.operation == ChangeOperation.MODIFIED
+
+    def test_missing_key_null_policy_still_rejects_single_field_identity(self, write_jsonl):
+        # Arrange: a single-field identity may not collapse to null, so the
+        # "null" policy still raises for the missing field, same as an
+        # explicit null value would.
+        old = write_jsonl("old.jsonl", [{"value": "old"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "value": "new"}])
+
+        # Act / Assert
+        with pytest.raises(InputError, match="must be a non-null scalar"):
+            with diff(old, new, key="id", missing_key="null"):
+                pass
+
+    def test_missing_key_null_policy_can_collide_across_missing_records(self, write_jsonl):
+        # Arrange: two distinct OLD records both missing "b" collapse into one
+        # (1, None) identity under the "null" policy, matching the documented
+        # collision risk of explicit composite nulls.
+        old = write_jsonl(
+            "old.jsonl",
+            [{"a": 1, "value": "first"}, {"a": 1, "value": "second"}],
+        )
+        new = write_jsonl("new.jsonl", [])
+
+        # Act / Assert
+        with pytest.raises(DuplicateKeyError):
+            with diff(old, new, key=("a", "b"), missing_key="null"):
+                pass
+
+    def test_invalid_missing_key_policy_is_rejected(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act / Assert
+        with pytest.raises(ConfigurationError, match="invalid missing-key policy"):
+            with diff(old, new, key="id", missing_key="bogus"):
+                pass
 
     def test_duplicate_identity_reports_source_and_physical_lines(self, write_jsonl):
         # Arrange

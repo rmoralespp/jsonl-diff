@@ -194,6 +194,44 @@ class TestCliExitCodes:
         assert exit_code == 1
         assert capsys.readouterr() == ("", "")
 
+    def test_missing_key_defaults_to_error(self, write_jsonl, capsys):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"value": "old"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "value": "new"}])
+
+        # Act
+        exit_code = main([str(old), str(new), "--key", "id", "--quiet"])
+
+        # Assert
+        assert exit_code == 2
+        assert "missing identity field" in capsys.readouterr().err
+
+    def test_missing_key_null_policy_tolerates_absent_composite_component(
+        self,
+        write_jsonl,
+        capsys,
+    ):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"a": 1, "value": "old"}])
+        new = write_jsonl("new.jsonl", [{"a": 1, "b": None, "value": "new"}])
+
+        # Act
+        exit_code = main(
+            [
+                str(old),
+                str(new),
+                "--key",
+                "a,b",
+                "--missing-key",
+                "null",
+                "--quiet",
+            ],
+        )
+
+        # Assert
+        assert exit_code == 1
+        assert capsys.readouterr() == ("", "")
+
     @pytest.mark.parametrize("stdin_side", ["old", "new"])
     def test_dash_reads_one_source_from_stdin(
         self,
@@ -490,6 +528,7 @@ class TestDetailsOutput:
             "ignore": ["/volatile"],
             "where": None,
             "duplicates": "error",
+            "missing_key": "error",
         }, {
             "type": "summary",
             "equal": 1,
