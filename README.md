@@ -8,12 +8,11 @@
   <img src="https://img.shields.io/github/license/rmoralespp/jsonl-diff.svg" alt="License">
 </p>
 
-Compare large JSONL/NDJSON datasets **by record identity instead of line
+A lightweight, pure-Python tool for comparing large [JSONL](https://jsonlines.org/)/[NDJSON](https://github.com/ndjson/ndjson-spec) datasets **by record identity instead of line
 position**, without loading the complete inputs into memory.
 
 `jsonl-diff` matches records using one or more top-level fields and reports:
-`equal`, `added`, `deleted`, `modified`, and tolerated duplicates in each
-source.
+`equal`, `added`, `deleted`, `modified`, and tolerated duplicates in each source.
 
 It is useful for snapshots, ETL validation, migrations, exports, and CI checks.
 
@@ -36,9 +35,7 @@ pip install "jsonl-diff[speedups]"
 ```
 
 It is used automatically when available — no configuration or code changes. When
-`msgspec` is absent, the pure-Python path runs instead and produces identical
-results (except that the accelerator rejects integer literals longer than
-CPython's ~4300-digit limit).
+`msgspec` is absent, the pure-Python path runs instead and produces identical results.
 
 ## Quick start
 
@@ -79,9 +76,9 @@ Record order does not matter.
 
 * Single or composite top-level identities.
 * Disk-backed comparison for large datasets ([architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md)).
-* Optional **JMESPath** filtering with `--where`.
+* Optional **[JMESPath](https://jmespath.org/)** filtering with `--where`.
 * Configurable duplicate handling with counts and diagnostics: `error`, `first`, or `last`.
-* Exact **RFC 6901** JSON Pointer ignores.
+* Exact **[RFC 6901](https://www.rfc-editor.org/info/rfc6901/)** JSON Pointer ignores.
 * Optional disk-backed observed-schema diff for fields, types, nullability, and requiredness.
 * Semantic number comparison using `Decimal`.
 * Optional `msgspec` accelerator for ~2x faster large diffs (`pip install "jsonl-diff[speedups]"`).

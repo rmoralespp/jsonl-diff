@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.3
+
 * **Added:** Optional `msgspec` accelerator (`pip install jsonl-diff[speedups]`, Python 3.10+) for C-based decoding 
     and canonicalization, speeding up large diffs ~2x end-to-end. Falls back to pure Python with identical results,
     except that the accelerator rejects integer literals longer than CPython's ~4300-digit limit.
