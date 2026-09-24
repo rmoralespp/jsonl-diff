@@ -25,6 +25,21 @@ It is useful for snapshots, ETL validation, migrations, exports, and CI checks.
 pip install jsonl-diff
 ```
 
+### Optional speedups
+
+For large datasets, install the optional [`msgspec`](https://jcristharif.com/msgspec/)
+accelerator (Python 3.10+), which uses a C parser and encoder for JSON decoding
+and record canonicalization, speeding up large diffs by roughly **2x**:
+
+```bash
+pip install "jsonl-diff[speedups]"
+```
+
+It is used automatically when available — no configuration or code changes. When
+`msgspec` is absent, the pure-Python path runs instead and produces identical
+results (except that the accelerator rejects integer literals longer than
+CPython's ~4300-digit limit).
+
 ## Quick start
 
 Given:
@@ -69,6 +84,7 @@ Record order does not matter.
 * Exact **RFC 6901** JSON Pointer ignores.
 * Optional disk-backed observed-schema diff for fields, types, nullability, and requiredness.
 * Semantic number comparison using `Decimal`.
+* Optional `msgspec` accelerator for ~2x faster large diffs (`pip install "jsonl-diff[speedups]"`).
 * Deterministic summaries and change iteration.
 * Original OLD/NEW physical line numbers.
 * Machine-readable JSONL change log with `--details` ([format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md)).
@@ -183,7 +199,8 @@ signature, result models, `Decimal` key semantics, and error hierarchy.
 `jsonl-diff` is intentionally strict:
 
 * Every input line must contain exactly one valid top-level JSON object.
-* Blank lines, malformed JSON, duplicate properties, `NaN`, and infinities are rejected.
+* Blank lines, malformed JSON, `NaN`, and infinities are rejected.
+* Duplicate object property names within a record follow JSON's last-wins semantics: the last occurrence is kept.
 * Identity fields must be top-level scalar values (`null` allowed only as one component of a composite key).
 * Identity types remain significant: `"1"` ≠ `1`, `true` ≠ `1`.
 * Duplicate identities fail by default; `--duplicates first`/`last` select one

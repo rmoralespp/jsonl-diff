@@ -12,9 +12,14 @@ filters records, compares content, and orders output. See the main
 - Local paths and binary streams are decoded as UTF-8. Text streams are
   already decoded, while URL response charset handling follows `py-jsonl`
   (defaulting to UTF-8 when no charset is declared).
-- Blank lines, malformed JSON, duplicate object property names, `NaN`, `Infinity`, and `-Infinity` are errors.
+- Blank lines, malformed JSON, `NaN`, `Infinity`, and `-Infinity` are errors.
+- Duplicate object property names within a record follow JSON's last-wins
+  semantics: the last occurrence of a repeated name is kept.
 - Top-level arrays, strings, numbers, booleans, and `null` are rejected.
 - Input errors identify `OLD` or `NEW` and include the physical line when available.
+- With the optional `msgspec` accelerator installed, integer literals longer than
+  CPython's `int_max_str_digits` limit (4300 digits by default) are rejected; the
+  pure-Python fallback accepts them.
 
 No normal summary or details output begins until both inputs pass complete
 input and duplicate validation.

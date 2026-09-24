@@ -480,7 +480,6 @@ class TestInputValidation:
             '{"id":NaN}',
             '{"id":Infinity}',
             '{"id":-Infinity}',
-            '{"id":1,"id":2}',
         ],
     )
     def test_invalid_json_is_rejected(self, write_jsonl, record):
@@ -492,6 +491,19 @@ class TestInputValidation:
         with pytest.raises(InputError):
             with diff(old, new, key="id"):
                 pass
+
+    def test_duplicate_object_keys_follow_last_wins(self, write_jsonl):
+        # Arrange: a repeated property keeps the last occurrence, so both records
+        # collapse to {"id": 2} and compare equal.
+        old = write_jsonl("old.jsonl", ['{"id":1,"id":2}'])
+        new = write_jsonl("new.jsonl", ['{"id":2}'])
+
+        # Act
+        with diff(old, new, key="id") as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
 
     @pytest.mark.parametrize("record", ["[]", '"record"', "1", "true", "null"])
     def test_non_object_record_is_rejected(self, write_jsonl, record):

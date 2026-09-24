@@ -33,6 +33,11 @@ dependencies = [
     "jmespath>=1.0.0",
 ]
 
+[project.optional-dependencies]
+speedups = [
+    "msgspec>=0.18; python_version >= '3.10'",
+]
+
 [project.scripts]
 jsonl-diff = "jsonl_diff:main"
 
@@ -48,6 +53,7 @@ test = [
     "coverage",
     "pytest-cov",
     "setuptools; python_version >= '3.12'",
+    "msgspec>=0.18; python_version >= '3.10'",
 ]
 lint = [
     "ruff",

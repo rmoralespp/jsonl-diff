@@ -2,16 +2,15 @@
 
 ## Unreleased
 
-- **Changed:** Speed up record canonicalization ~4x on large datasets by
-  escaping strings with CPython's C-accelerated encoder, rewriting the
-  canonical serializer with `type()` dispatch and list-comprehension joins, and
-  hashing integral content values in a faster form. Comparison results are
-  unchanged; identity and `--details` key notation still round-trip exactly.
-- **Changed:** Speed up the disk-backed SQLite index phase. Records are written
-  in batched `executemany` inserts, the change summary is computed with a single
-  identity join plus range counts instead of correlated subqueries (~4x faster
-  read), and connection PRAGMAs are tuned for the transient workspace. Duplicate
-  detection, size limits, and results are unchanged.
+* **Added:** Optional `msgspec` accelerator (`pip install jsonl-diff[speedups]`, Python 3.10+) for C-based decoding 
+    and canonicalization, speeding up large diffs ~2x end-to-end. Falls back to pure Python with identical results,
+    except that the accelerator rejects integer literals longer than CPython's ~4300-digit limit.
+* **Changed:** Speed up record canonicalization ~4x on large datasets with faster string escaping, serialization, 
+   and integral-value hashing. Comparison results and identity/`--details` key notation are unchanged.
+* **Changed:** Speed up the disk-backed SQLite index phase with batched inserts, optimized change-summary queries, 
+    tuned connection settings (~4x faster reads). Duplicate detection, size limits, and results are unchanged.
+* **Changed:** Duplicate object property names now follow JSON last-wins semantics instead of raising an error, in 
+    both `msgspec` and pure-Python parsers.
 
 ## v0.1.2
 
