@@ -157,9 +157,11 @@ Schema iteration requires an open result and raises `RuntimeError` when schema
 diff was not enabled. Schema summary values remain available after closing.
 
 With numeric keys, API key components are `decimal.Decimal` values. For
-example, JSON identity `7` is returned as `Decimal("7")`; JSON strings and
-booleans retain their types. Details JSONL writes numeric keys as JSON numbers,
-including arbitrary-precision integers.
+example, JSON identity `7` is returned as `Decimal("7")`; JSON strings,
+booleans, objects, and arrays retain their JSON types. Object member order is
+canonicalized recursively, while array element order remains significant.
+Details JSONL writes identity values as JSON values, including
+arbitrary-precision numbers.
 
 ## API errors
 

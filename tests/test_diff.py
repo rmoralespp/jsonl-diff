@@ -131,6 +131,50 @@ class TestDiffSummary:
 
 
 class TestIdentityKeys:
+    @pytest.mark.parametrize(
+        "identity",
+        [
+            {"region": "ES", "customer": 7},
+            ["ES", 7, {"active": True}],
+        ],
+    )
+    def test_structured_identity_values_are_supported(self, write_jsonl, identity):
+        old = write_jsonl("old.jsonl", [{"id": identity, "value": "before"}])
+        new = write_jsonl("new.jsonl", [{"id": identity, "value": "after"}])
+
+        with diff(old, new, key="id") as result:
+            change = next(result.changes())
+
+        assert change.key == (identity,)
+        assert change.operation == ChangeOperation.MODIFIED
+
+    def test_identity_object_member_order_is_ignored(self, write_jsonl):
+        old = write_jsonl("old.jsonl", ['{"id":{"a":1,"b":{"x":2,"y":3}}}'])
+        new = write_jsonl("new.jsonl", ['{"id":{"b":{"y":3,"x":2},"a":1}}'])
+
+        with diff(old, new, key="id") as result:
+            summary = result.summary
+
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+
+    def test_identity_array_order_is_significant(self, write_jsonl):
+        old = write_jsonl("old.jsonl", ['{"id":[1,2]}'])
+        new = write_jsonl("new.jsonl", ['{"id":[2,1]}'])
+
+        with diff(old, new, key="id") as result:
+            summary = result.summary
+
+        assert summary == Summary(equal=0, added=1, deleted=1, modified=0)
+
+    def test_identity_nested_numbers_use_json_numeric_semantics(self, write_jsonl):
+        old = write_jsonl("old.jsonl", ['{"id":{"version":1,"values":[2.0]}}'])
+        new = write_jsonl("new.jsonl", ['{"id":{"version":1.0,"values":[2e0]}}'])
+
+        with diff(old, new, key="id") as result:
+            summary = result.summary
+
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+
     def test_composite_key_is_returned_as_typed_tuple(self, write_jsonl):
         # Arrange
         old = write_jsonl("old.jsonl", [{"country": "ES", "customer": 7, "value": "before"}])
@@ -581,8 +625,6 @@ class TestInputValidation:
         [
             ({}, "missing identity field"),
             ({"id": None}, "must be a non-null scalar"),
-            ({"id": []}, "must be a non-null scalar"),
-            ({"id": {}}, "must be a non-null scalar"),
         ],
     )
     def test_invalid_identity_component_is_rejected(self, write_jsonl, record, message):

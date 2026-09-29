@@ -26,9 +26,9 @@ try:  # Optional C-accelerated content canonicalization (Python 3.10+).
 except ImportError:
     _msgspec = None
 
-JsonScalar = Union[str, Decimal, bool, None]
+JsonIdentityValue = Union[str, Decimal, bool, int, None, list, dict]
 Number = Union[Decimal, int, float]
-IdentityKey = Tuple[JsonScalar, ...]
+IdentityKey = Tuple[JsonIdentityValue, ...]
 
 
 class _Num(Decimal):
@@ -605,8 +605,8 @@ def _identity(
             # record into one indistinguishable identity.
             if not composite:
                 raise ValueError("identity field {!r} must be a non-null scalar".format(name))
-        elif not isinstance(value, (str, Decimal, bool, int)):
-            raise ValueError("identity field {!r} must be a non-null scalar".format(name))
+        elif not isinstance(value, (str, Decimal, bool, int, list, dict)):
+            raise ValueError("identity field {!r} must be a JSON value".format(name))
         values.append(value)
     return tuple(values)
 
