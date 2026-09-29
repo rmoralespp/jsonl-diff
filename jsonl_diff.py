@@ -1,6 +1,7 @@
 """Strict, disk-backed reconciliation of JSON Lines datasets."""
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -672,21 +673,53 @@ else:
         )
 
 
-def _parallel_enabled() -> bool:
-    """Return whether the two sides may be indexed in separate processes."""
-    return os.environ.get("JSONL_DIFF_PARALLEL", "1") not in ("0", "")
+def _parallel_setting() -> Optional[bool]:
+    """Return the explicit `JSONL_DIFF_PARALLEL` choice, or None for automatic."""
+    setting = os.environ.get("JSONL_DIFF_PARALLEL")
+    if setting is None:
+        return None
+    return setting not in ("0", "")
+
+
+def _can_fork() -> bool:
+    import multiprocessing
+    import threading
+
+    # Forking a multi-threaded process can deadlock the child, and CPython 3.14
+    # already moved the platform default away from `fork` for that reason.
+    return (
+        "fork" in multiprocessing.get_all_start_methods()
+        and threading.active_count() == 1
+    )
+
+
+def _cli_entry_point() -> bool:
+    """Return whether `__main__` is the jsonl-diff command line entry point.
+
+    Every start method except `fork` re-imports `__main__` in each worker, so
+    an embedding application's module-level code would run once per side, and
+    an unguarded one cannot start workers at all. Automatic parallel indexing
+    is therefore limited to our own CLI, whose module guard makes re-import
+    safe; library callers ask for it with `JSONL_DIFF_PARALLEL=1`.
+    """
+    module = sys.modules.get("__main__")
+    spec = getattr(module, "__spec__", None)
+    if spec is not None:
+        return spec.name in ("jsonl_diff", "jsonl_diff.__main__")
+    path = getattr(module, "__file__", None)
+    if not path:
+        return False
+    stem = os.path.splitext(os.path.basename(path))[0]
+    return stem in ("jsonl-diff", "jsonl_diff")
 
 
 def _multiprocessing_context() -> Any:
     import multiprocessing
-    import threading
 
     # `fork` skips a second interpreter startup and re-import of ijson,
-    # jmespath and msgspec, which would otherwise cost more than the work
-    # saved on small inputs. It is only safe while this process is
-    # single-threaded, so a threaded embedder builds the child from scratch.
-    single_threaded = threading.active_count() == 1
-    if single_threaded and "fork" in multiprocessing.get_all_start_methods():
+    # jmespath and msgspec. That is worth ~30 % on a few thousand records and
+    # fades to noise from ~67k records up, where the indexing work dominates.
+    if _can_fork():
         return multiprocessing.get_context("fork")
     return multiprocessing.get_context("spawn")
 
@@ -1286,7 +1319,13 @@ class DiffResult:
 
     def _parallel_eligible(self) -> bool:
         """Return whether both sides can be indexed in separate processes."""
-        if not _parallel_enabled():
+        setting = _parallel_setting()
+        if setting is False:
+            return False
+        # Without `fork` the workers re-import `__main__`, which is only known
+        # to be safe for our own CLI. A library caller on such a platform
+        # (every Windows run) opts in with `JSONL_DIFF_PARALLEL=1`.
+        if setting is None and not _can_fork() and not _cli_entry_point():
             return False
         # Each worker owns a private database, so the parent cannot enforce a
         # single combined budget while they run. Keep the sequential path,
@@ -1336,10 +1375,10 @@ class DiffResult:
             raise ResourceError("could not build the temporary index") from error
         finally:
             for path in paths:
-                try:
+                # Windows cannot unlink a file that is still open; the
+                # workspace removes whatever is left when it is cleaned up.
+                with contextlib.suppress(OSError):
                     os.remove(path)
-                except OSError:
-                    pass
 
         if failed:
             # A worker exited non-zero, so its database holds only the records
