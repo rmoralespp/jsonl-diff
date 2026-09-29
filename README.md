@@ -27,7 +27,7 @@ pip install jsonl-diff
 
 ### Optional speedups
 
-For large datasets, install the optional [`msgspec`](https://jcristharif.com/msgspec/)
+For large datasets, install the optional [`msgspec`](https://github.com/msgspec/msgspec)
 accelerator (Python 3.10+), which uses a C parser and encoder for JSON decoding
 and record canonicalization, speeding up large diffs by roughly **2x**:
 
