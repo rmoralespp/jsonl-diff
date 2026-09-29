@@ -27,15 +27,14 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.14'
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install --group=test --editable .
-          python -m pip install build
+        run: uv sync --frozen --group test
       - name: Test with pytest
-        run: python -m pytest tests/
+        run: uv run pytest tests/
       - name: Build package
-        run: python -m build
+        run: uv build
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
