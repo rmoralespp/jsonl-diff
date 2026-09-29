@@ -621,18 +621,19 @@ def _compile_where(expression: str) -> Any:
 
 
 def _normalize_array_numbers(value: Any) -> Any:
-    # Dispatches on exact type in frequency order, like `_json_text`. A census of
-    # visited nodes over the sample corpora found str 44-89 %, None 0-29 %,
-    # dict 9-15 %, list 0-18 %, and int/bool never above 11 %, so the rare
-    # scalars are tested after the containers rather than before them.
+    # Dispatches on exact type, pass-through leaves first. A census of visited
+    # nodes over the sample corpora found str 44-89 %, None 0-29 %, dict 9-15 %,
+    # list 0-18 %, int/bool never above 11 % and Decimal 0 %, but that reflects
+    # database dumps whose identifiers and dates are strings. Numeric payloads
+    # would invert the int/container ratio, so every scalar that is returned
+    # unchanged is grouped ahead of the containers rather than ordered strictly
+    # by the frequencies seen here.
     # `_Num` subclasses `Decimal`, so `type(value) is Decimal` on its own
     # already excludes values a previous pass converted. Subclasses of the
     # exact types fall through to the isinstance tail, which preserves the
     # original behaviour.
     kind = type(value)
-    if kind is str:
-        return value
-    if value is None:
+    if kind is str or value is None or kind is int or kind is bool:
         return value
     if kind is dict:
         return {name: _normalize_array_numbers(item) for name, item in value.items()}
@@ -640,8 +641,6 @@ def _normalize_array_numbers(value: Any) -> Any:
         return [_normalize_array_numbers(item) for item in value]
     if kind is Decimal:
         return _Num(value)
-    if kind is int or kind is bool:
-        return value
     if isinstance(value, Decimal):
         return value if isinstance(value, _Num) else _Num(value)
     if isinstance(value, list):
