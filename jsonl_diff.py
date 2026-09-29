@@ -1375,8 +1375,12 @@ class DiffResult:
             raise ResourceError("could not build the temporary index") from error
         finally:
             for path in paths:
-                # Windows cannot unlink a file that is still open; the
-                # workspace removes whatever is left when it is cleaned up.
+                # Halve the peak workspace: the merged index is about the same
+                # size as the two worker databases together, and the rest of
+                # the run would otherwise hold both. Purely a disk-space
+                # measure -- the workers have exited and the databases are
+                # already detached, so nothing still holds these files open,
+                # and `close()` would remove them regardless.
                 with contextlib.suppress(OSError):
                     os.remove(path)
 
