@@ -10,7 +10,7 @@ import sqlite3
 import sys
 import tempfile
 import warnings
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from json.encoder import encode_basestring as _encode_basestring
@@ -703,14 +703,16 @@ def _cli_entry_point() -> bool:
     safe; library callers ask for it with `JSONL_DIFF_PARALLEL=1`.
     """
     module = sys.modules.get("__main__")
-    spec = getattr(module, "__spec__", None)
-    if spec is not None:
-        return spec.name in ("jsonl_diff", "jsonl_diff.__main__")
-    path = getattr(module, "__file__", None)
-    if not path:
+    if module is None:
         return False
-    stem = os.path.splitext(os.path.basename(path))[0]
-    return stem in ("jsonl-diff", "jsonl_diff")
+    # `python -m jsonl_diff` runs this module itself as `__main__`; the
+    # console script does `from jsonl_diff import main`. Both leave `main`
+    # bound to this module's own function, which beats matching file names
+    # (the Windows entry point is an `.exe`, or a `-script.py` shim).
+    if getattr(module, "main", None) is main:
+        return True
+    spec = getattr(module, "__spec__", None)
+    return spec is not None and spec.name in ("jsonl_diff", "jsonl_diff.__main__")
 
 
 def _multiprocessing_context() -> Any:
@@ -733,8 +735,6 @@ def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") ->
     """
     result = None
     try:
-        if config.where is not None:
-            config = replace(config, where_expression=_compile_where(config.where))
         result = DiffResult(source, source, config)
         result._open_connection(db_path)
         result._index(source, side)
@@ -1349,14 +1349,14 @@ class DiffResult:
             os.path.join(self._workspace.name, "side{}.sqlite3".format(side))
             for side in (0, 1)
         ]
-        # `where_expression` is a compiled jmespath object and is not picklable;
-        # workers recompile it from `where`.
-        config = replace(self.config, where_expression=None)
+        # `fork` inherits the compiled `--where` expression and every other
+        # start method pickles it; either way the worker gets the config as
+        # it stands here.
         workers = []
         for side, source in enumerate((self._old, self._new)):
             process = context.Process(
                 target=_index_worker,
-                args=(paths[side], os.fspath(source), side, config),
+                args=(paths[side], os.fspath(source), side, self.config),
                 daemon=True,
             )
             process.start()

@@ -163,16 +163,29 @@ jsonl-diff CLI, which is safe to re-import:
 Everything below was verified on Linux, and the `spawn` path was exercised by
 patching `_can_fork()` to return `False`. None of it has run on real Windows.
 
-1. **Correctness.** Diff a file against a modified copy and confirm parallel and
-   sequential agree byte for byte, including `--details`:
+Note what is **not** worth testing: comparing parallel against sequential
+output on Windows. Both sides run the same indexing code on the same platform,
+so any Windows-wide behaviour affects them equally and cancels out, and there
+is no mechanism by which the merge alone would produce different rows. The
+`spawn` code path — `DiffConfig` pickling, re-importing the module in the child
+— is already covered on Linux. A single run is still worth doing as a smoke
+test that the tool works at all, but it is not a correctness check.
+
+1. **Entry point detection.** This is the one thing that can go wrong on
+   Windows and nowhere else, and it fails *silently* by falling back to
+   sequential indexing. `_cli_entry_point()` no longer matches file names; it
+   checks whether `__main__.main` is this module's `main`, which holds for
+   `python -m jsonl_diff`, for a `jsonl-diff.exe` launcher and for a
+   `jsonl-diff-script.py` shim. Confirm both installed entry points are
+   recognised:
 
    ```
-   jsonl-diff --format json --key <k> --details p.jsonl old.json new.json > p.out
-   set JSONL_DIFF_PARALLEL=0
-   jsonl-diff --format json --key <k> --details s.jsonl old.json new.json > s.out
-   fc /b p.out s.out
-   fc /b p.jsonl s.jsonl
+   python -m jsonl_diff ...
+   jsonl-diff ...
    ```
+
+   Instrument `_parallel_eligible()` or compare wall time against
+   `JSONL_DIFF_PARALLEL=0`; a large file should be clearly faster.
 
 2. **Temporary file removal.** The worker databases are unlinked after the
    merge purely to halve peak disk; the unlink is wrapped in
@@ -185,30 +198,21 @@ patching `_can_fork()` to return `False`. None of it has run on real Windows.
    cleanup raises and is reported through `warnings.warn`. Check that no
    `could not remove temporary files` warning appears.
 
-4. **The CLI detection.** Both entry points must be recognised, otherwise
-   Windows silently loses the speedup:
-
-   ```
-   python -m jsonl_diff ...
-   jsonl-diff ...
-   ```
-
-   Verify with `--quiet` timing, or instrument `_parallel_eligible()`.
-
-5. **The unguarded-embedder path.** Run a script that calls `jsonl_diff.diff()`
+4. **The unguarded-embedder path.** Run a script that calls `jsonl_diff.diff()`
    at module level with no `if __name__ == "__main__":` guard. Expected: no
    workers are started at all (the gate declines), so no child traceback is
    printed and the result is correct. With `JSONL_DIFF_PARALLEL=1` the gate is
    bypassed and the child traceback **is** expected, followed by a correct
    result from the sequential retry.
 
-6. **A frozen build**, if one is ever produced. `spawn` on Windows requires
+5. **A frozen build**, if one is ever produced. `spawn` on Windows requires
    `multiprocessing.freeze_support()` in the frozen entry point. The CLI does
    not call it today.
 
-7. **Timings.** None of the numbers in this document were produced on Windows.
+6. **Timings.** None of the numbers in this document were produced on Windows.
    Process creation is considerably more expensive there, so the small-file
-   figures in particular may not hold.
+   figures in particular may not hold, and the 6 k-record case may well be
+   slower than sequential.
 
 ## Verification already done (Linux, Python 3.14.7)
 
