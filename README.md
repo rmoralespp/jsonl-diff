@@ -214,7 +214,9 @@ signature, result models, `Decimal` key semantics, and error hierarchy.
   elements are the records.
 * Blank lines, malformed JSON, `NaN`, and infinities are rejected.
 * Duplicate object property names within a record follow JSON's last-wins semantics: the last occurrence is kept.
-* Identity fields must be top-level scalar values (`null` allowed only as one component of a composite key).
+* Identity fields must be top-level JSON values. Object member order is ignored
+  and array order is significant (`null` allowed only as one component of a
+  composite key).
 * Identity types remain significant: `"1"` ≠ `1`, `true` ≠ `1`.
 * Duplicate identities fail by default; `--duplicates first`/`last` select one
   occurrence, report every discarded occurrence, and return exit code `1`.

@@ -27,8 +27,9 @@ input and duplicate validation.
 ## Identity and duplicates
 
 Identity fields are top-level object-member names. Each component must exist
-and be a string, number, boolean, or (composite identities only) `null`;
-objects and arrays are invalid. A single-field identity may not be `null`,
+and be a JSON value: strings, numbers, booleans, objects, and arrays are
+allowed, as is (for composite identities only) `null`. A single-field identity
+may not be `null`,
 since that would collapse every `null` record into one indistinguishable
 identity; a `null` value is only tolerated as one component of a composite
 (multi-field) identity. Uniqueness is still enforced on the complete
@@ -49,7 +50,8 @@ surrounding whitespace before this check, so `--key " country , customer "`
 is equivalent to `--key country,customer`.
 
 JSON types remain significant: `"1"` is different from `1`, and `true` is
-different from `1`.
+different from `1`. Object member order is ignored recursively, while array
+element order is significant.
 
 Every normalized identity must be unique within OLD and within NEW by default.
 The first duplicate aborts the comparison; `DuplicateKeyError` reports the

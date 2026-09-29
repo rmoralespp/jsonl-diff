@@ -597,6 +597,26 @@ class TestDetailsOutput:
         # Assert
         assert records[1]["key"] == [12345678901234567890]
 
+    def test_structured_key_is_written_to_details_as_json(
+        self,
+        write_jsonl,
+        tmp_path,
+    ):
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": {"region": "ES", "customer": 7}, "value": "before"}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": {"customer": 7, "region": "ES"}, "value": "after"}],
+        )
+        details = tmp_path / "changes.jsonl"
+
+        main([str(old), str(new), "--key", "id", "--details", str(details), "--quiet"])
+        records = [json.loads(line) for line in details.read_text(encoding="utf-8").splitlines()]
+
+        assert records[1]["key"] == [{"customer": 7, "region": "ES"}]
+
     def test_duplicate_events_follow_meta_and_include_policy_outcome(
         self,
         write_jsonl,
