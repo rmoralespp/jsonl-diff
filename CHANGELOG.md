@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.1.5
+
 * **Added:** Allow objects and arrays as identity 
 * **Changed:** Use locked uv modes in CI and CD
 
