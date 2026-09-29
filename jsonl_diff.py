@@ -9,7 +9,7 @@ import sqlite3
 import sys
 import tempfile
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import Enum
 from json.encoder import encode_basestring as _encode_basestring
@@ -84,6 +84,12 @@ class InputError(JsonlDiffError):
             location += " at line {}".format(line)
         super().__init__("{}{}".format(message, location))
 
+    def __reduce__(self) -> Tuple[Any, ...]:
+        # The default reduction would replay `args` (the already formatted
+        # message) through `__init__`, which needs `source` too. Parallel
+        # indexing ships these across a process boundary, so reduce explicitly.
+        return (_rebuild_input_error, (type(self), str(self), self.source, self.line))
+
 
 class DuplicateKeyError(InputError):
     """Raised when an identity occurs more than once in one source."""
@@ -97,6 +103,22 @@ class DuplicateKeyError(InputError):
             ", ".join(str(line) for line in lines),
         )
         super().__init__(message, source)
+
+    def __reduce__(self) -> Tuple[Any, ...]:
+        return (DuplicateKeyError, (self.key, self.source, self.lines))
+
+
+def _rebuild_input_error(
+    class_: type,
+    message: str,
+    source: str,
+    line: Optional[int],
+) -> InputError:
+    error = class_.__new__(class_)
+    Exception.__init__(error, message)
+    error.source = source
+    error.line = line
+    return error
 
 
 class ResourceError(JsonlDiffError):
@@ -672,6 +694,66 @@ else:
         )
 
 
+def _parallel_enabled() -> bool:
+    """Return whether the two sides may be indexed in separate processes."""
+    return os.environ.get("JSONL_DIFF_PARALLEL", "1") not in ("0", "")
+
+
+def _multiprocessing_context() -> Any:
+    import multiprocessing
+    import threading
+
+    # `fork` skips a second interpreter startup and re-import of ijson,
+    # jmespath and msgspec, which would otherwise cost more than the work
+    # saved on small inputs. It is only safe while this process is
+    # single-threaded, so a threaded embedder falls back to a start method
+    # that builds the child from scratch.
+    methods = multiprocessing.get_all_start_methods()
+    if "fork" in methods and threading.active_count() == 1:
+        name = "fork"
+    elif "forkserver" in methods:
+        name = "forkserver"
+    else:
+        name = "spawn"
+    return multiprocessing.get_context(name)
+
+
+def _index_worker(
+    db_path: str,
+    source: str,
+    side: int,
+    config: "DiffConfig",
+    sender: Any,
+) -> None:
+    """Index one side into a private database and report the outcome."""
+    result = None
+    try:
+        if config.where is not None:
+            config = replace(config, where_expression=_compile_where(config.where))
+        result = DiffResult(source, source, config)
+        result._open_connection(db_path)
+        result._index(source, side)
+        result._connection.commit()
+    except BaseException as error:  # noqa: BLE001 - relayed to the parent
+        outcome = error
+    else:
+        outcome = None
+    finally:
+        if result is not None:
+            result.close()
+    try:
+        sender.send(outcome)
+    except Exception:  # noqa: BLE001 - the original error is not picklable
+        sender.send(
+            InputError(
+                "invalid input ({})".format(type(outcome).__name__),
+                "OLD" if side == 0 else "NEW",
+            ),
+        )
+    finally:
+        sender.close()
+
+
 class DiffResult:
     """A context-managed, disk-backed comparison result."""
 
@@ -691,13 +773,19 @@ class DiffResult:
 
     def _open(self) -> None:
         try:
-            self._workspace = tempfile.TemporaryDirectory(prefix="jsonl-diff-")
-            self._connection = sqlite3.connect(os.path.join(self._workspace.name, "index.sqlite3"))
-            self._configure_database()
-            self._create_schema()
+            self._open_workspace()
+            self._open_connection(os.path.join(self._workspace.name, "index.sqlite3"))
         except (OSError, sqlite3.Error) as error:
             self.close()
             raise ResourceError("could not create the temporary index") from error
+
+    def _open_workspace(self) -> None:
+        self._workspace = tempfile.TemporaryDirectory(prefix="jsonl-diff-")
+
+    def _open_connection(self, path: str) -> None:
+        self._connection = sqlite3.connect(path)
+        self._configure_database()
+        self._create_schema()
 
     def _configure_database(self) -> None:
         self._connection.execute("PRAGMA journal_mode = OFF")
@@ -1021,9 +1109,12 @@ class DiffResult:
             raise RuntimeError("the diff result cannot be entered more than once")
         self._started = True
         try:
-            self._open()
-            self._index(self._old, 0)
-            self._index(self._new, 1)
+            if self._parallel_eligible():
+                self._index_parallel()
+            else:
+                self._open()
+                self._index(self._old, 0)
+                self._index(self._new, 1)
             self._summary_value = self._calculate_summary()
             return self
         except BaseException:
@@ -1231,6 +1322,100 @@ class DiffResult:
             raise InputError(message, name, line) from error
         except sqlite3.DatabaseError as error:
             raise ResourceError("could not build the temporary index") from error
+
+    def _parallel_eligible(self) -> bool:
+        """Return whether both sides can be indexed in separate processes."""
+        if not _parallel_enabled():
+            return False
+        # Each worker owns a private database, so the parent cannot enforce a
+        # single combined budget while they run. Keep the sequential path,
+        # whose incremental `_check_size` is what `--max-temp` promises.
+        if self.config.max_temp is not None:
+            return False
+        # Only re-openable, picklable sources survive a process boundary; file
+        # objects and stdin must stay in this process.
+        return all(
+            isinstance(source, (str, os.PathLike)) and os.fspath(source) != "-"
+            for source in (self._old, self._new)
+        )
+
+    def _index_parallel(self) -> None:
+        context = _multiprocessing_context()
+        try:
+            self._open_workspace()
+        except OSError as error:
+            raise ResourceError("could not create the temporary index") from error
+        paths = [
+            os.path.join(self._workspace.name, "side{}.sqlite3".format(side))
+            for side in (0, 1)
+        ]
+        # `where_expression` is a compiled jmespath object and is not picklable;
+        # workers recompile it from `where`.
+        config = replace(self.config, where_expression=None)
+        workers = []
+        for side, source in enumerate((self._old, self._new)):
+            receiver, sender = context.Pipe(duplex=False)
+            process = context.Process(
+                target=_index_worker,
+                args=(paths[side], os.fspath(source), side, config, sender),
+                daemon=True,
+            )
+            process.start()
+            sender.close()
+            workers.append((process, receiver))
+
+        errors = []
+        for side, (process, receiver) in enumerate(workers):
+            try:
+                error = receiver.recv()
+            except EOFError:
+                error = ResourceError(
+                    "the {} indexing worker died".format("OLD" if side == 0 else "NEW"),
+                )
+            finally:
+                receiver.close()
+                process.join()
+            errors.append(error)
+        # Report OLD before NEW so failures stay deterministic and match the
+        # sequential ordering.
+        for error in errors:
+            if error is not None:
+                raise error
+
+        try:
+            self._open_connection(os.path.join(self._workspace.name, "index.sqlite3"))
+            self._merge_worker_databases(paths)
+        except (OSError, sqlite3.Error) as error:
+            raise ResourceError("could not build the temporary index") from error
+        for path in paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+    def _merge_worker_databases(self, paths: Sequence[str]) -> None:
+        tables = ["records", "duplicate_records"]
+        if self.config.schema_diff:
+            tables += ["schema_fields", "schema_objects"]
+        for index, path in enumerate(paths):
+            alias = "worker{}".format(index)
+            # ATTACH and DETACH cannot run inside an open transaction, so each
+            # worker database is merged in its own committed transaction.
+            self._connection.execute(
+                "ATTACH DATABASE ? AS {}".format(alias),
+                (path,),
+            )
+            try:
+                with self._connection:
+                    for table in tables:
+                        # Rows arrive already keyed by side and sorted by the
+                        # worker's own primary key, so this is a C-level
+                        # append into the merged B-tree.
+                        self._connection.execute(
+                            "INSERT INTO {0} SELECT * FROM {1}.{0}".format(table, alias),
+                        )
+            finally:
+                self._connection.execute("DETACH DATABASE {}".format(alias))
 
     def _check_size(self) -> None:
         if self.config.max_temp is None:
