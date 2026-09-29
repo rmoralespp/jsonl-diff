@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+* **Added:** Allow objects and arrays as identity values
+
 ## v0.1.4
 
 * **Added:** `--missing-key {error,null}` and `missing_key=` control how missing identity fields are 
