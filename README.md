@@ -38,6 +38,19 @@ pip install "jsonl-diff[speedups]"
 It is used automatically when available — no configuration or code changes. When
 `msgspec` is absent, the pure-Python path runs instead and produces identical results.
 
+### Parallel indexing
+
+For large local files, `--parallel` indexes OLD and NEW in separate processes:
+
+```bash
+jsonl-diff old.jsonl new.jsonl --key id --parallel
+```
+
+Parallel indexing is opt-in because process startup makes it slower for small
+inputs. It requires two local path sources and cannot currently be combined
+with `--max-temp`. HTTP/HTTPS, stdin, and file-like sources remain available
+through the default sequential mode.
+
 ## Quick start
 
 Given:
@@ -87,6 +100,7 @@ Record order does not matter.
 * Machine-readable JSONL change log with `--details` ([format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md)).
 * Local, HTTP/HTTPS, file-like, and supported compressed sources.
 * Incremental parsing for JSONL/NDJSON by default, with support for top-level JSON arrays via `--format json`.
+* Optional process-based parallel indexing for large local inputs.
 * CLI and Python API using the same comparison engine.
 
 ## CLI
@@ -96,7 +110,7 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
            [--duplicates {error,first,last}] [--missing-key {error,null}]
            [--details FILE] [--quiet]
            [--schema-diff] [--schema-ignore POINTER] [--max-temp MAX_TEMP]
-           [--format {jsonl,json}]
+           [--parallel] [--format {jsonl,json}]
            old new
 ```
 
@@ -113,6 +127,7 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--schema-ignore`     | RFC 6901 pointer to exclude from observed-schema profiling                     |
 | `--quiet`             | Suppress the normal summary                                                    |
 | `--max-temp BYTES`    | Best-effort budget for `jsonl-diff` workspace temporary storage                |
+| `--parallel`          | Index two local path sources concurrently in separate processes                |
 | `--format FORMAT`     | Input format: `jsonl` (default) or a top-level JSON array with `json`          |
 
 Examples:
@@ -171,6 +186,7 @@ with diff(
     ignore=("/updated_at",),
     where='country == `"ES"`',
     schema_diff=True,
+    parallel=True,
 ) as result:
     print(result.summary)
 
@@ -184,6 +200,10 @@ with diff(
 `diff()` returns a disk-backed `DiffResult`, used as a context manager.
 Results are streamed lazily through `changes()` rather than materialized in
 memory.
+
+On platforms that use multiprocessing `spawn`, including Windows, calls using
+`parallel=True` from an executable script must be protected by the usual
+`if __name__ == "__main__":` guard.
 
 The main result models are:
 

@@ -17,10 +17,10 @@ with diff(
         ignore=("/updated_at",),
         where="country == `\"ES\"`",
         duplicates="error",
-        max_temp=2_000_000_000,
         schema_diff=True,
         schema_ignore=("/metadata",),
         format="jsonl",
+        parallel=True,
 ) as result:
     print(result.summary)
 
@@ -36,7 +36,7 @@ The callable signature is:
 ```python
 from typing import Any, Optional, Sequence, Union
 
-from jsonl_diff import DiffResult, DuplicatePolicy
+from jsonl_diff import DiffResult, DuplicatePolicy, MissingKeyPolicy
 
 
 def diff(
@@ -47,10 +47,12 @@ def diff(
         ignore: Sequence[str] = (),
         where: Optional[str] = None,
         duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
+        missing_key: Union[str, MissingKeyPolicy] = MissingKeyPolicy.ERROR,
         max_temp: Optional[int] = None,
         schema_diff: bool = False,
         schema_ignore: Sequence[str] = (),
         format: str = "jsonl",
+        parallel: bool = False,
 ) -> DiffResult:
     ...
 ```
@@ -64,6 +66,13 @@ result rather than a list held in memory.
 `format="json"` for sources containing one top-level JSON array; its elements
 are parsed incrementally with `ijson`. Both formats support the same local,
 remote, compressed, and file-like sources.
+
+`parallel=True` indexes OLD and NEW concurrently in separate spawned
+processes. It requires two local path sources and cannot be combined with
+`max_temp`. It is intended for large inputs because process startup can
+outweigh the benefit for small files. Calls from executable scripts on
+spawn-based platforms, including Windows, require an
+`if __name__ == "__main__":` guard.
 
 Using `DiffResult` as a context manager is required. It owns the temporary
 resources and removes its private workspace on exit. A result cannot be entered

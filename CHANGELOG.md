@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* **Added:** Opt-in process-based parallel indexing for large local inputs via
+  `--parallel` and `parallel=True`.
+
 ## v0.1.5
 
 * **Added:** Allow objects and arrays as identity 

@@ -24,6 +24,30 @@ scales with the number of selected records plus tolerated duplicate
 occurrences rather than the combined input size. Duplicate diagnostics compare
 stored fingerprints and do not require retaining or rereading full records.
 
+## Parallel indexing
+
+With `parallel=True` / `--parallel`, two spawned worker processes index local
+OLD and NEW path sources concurrently into separate SQLite databases. After
+both inputs pass validation, the OLD database becomes the result database,
+the NEW database is attached, and its rows are copied into OLD. Existing
+summary and iterator queries then use the combined database unchanged.
+
+This mode is opt-in because process startup is slower for small inputs. It
+requires two local path sources and cannot currently be combined with
+`max_temp`; HTTP/HTTPS, stdin, and file-like sources use the default sequential
+mode. Compressed local paths remain supported.
+
+Errors retain deterministic OLD-before-NEW precedence. If OLD fails, the NEW
+worker is terminated and joined before the workspace is removed. Worker
+failures are transported as serializable internal data and reconstructed as
+the existing public exception types in the parent process.
+
+While workers run, temporary storage is the sum of both side indexes. During
+the one-sided merge, the OLD database grows toward the final combined size
+while the NEW database still exists, so peak usage can approach roughly three
+single-side indexes. The NEW database is removed immediately after a
+successful merge.
+
 ## Observed-schema profile
 
 When `schema_diff=True` / `--schema-diff` is enabled, indexing also builds an

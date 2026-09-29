@@ -10,7 +10,16 @@ import threading
 import pytest
 
 import jsonl_diff
-from jsonl_diff import ConfigurationError, InputError, ResourceError, Summary, diff
+from jsonl_diff import (
+    ChangeOperation,
+    ConfigurationError,
+    DuplicateKeyError,
+    InputError,
+    ResourceError,
+    SchemaChangeOperation,
+    Summary,
+    diff,
+)
 
 
 def _write_gzip(path, content):
@@ -291,3 +300,142 @@ class TestTemporaryStorage:
         with pytest.raises(InputError):
             with diff(old, new, key="id"):
                 pass
+
+
+class TestParallelIndexing:
+    def test_local_paths_are_indexed_in_parallel(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1}, {"id": 2, "value": "before"}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 2, "value": "after"}, {"id": 3}],
+        )
+
+        # Act
+        with diff(old, new, key="id", parallel=True) as result:
+            summary = result.summary
+            changes = list(result.changes())
+
+        # Assert
+        assert summary == Summary(equal=0, added=1, deleted=1, modified=1)
+        assert [change.operation for change in changes] == [
+            ChangeOperation.DELETED,
+            ChangeOperation.MODIFIED,
+            ChangeOperation.ADDED,
+        ]
+
+    def test_parallel_index_preserves_duplicates_and_schema(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "legacy": True}, {"id": 1, "legacy": True}],
+        )
+        new = write_jsonl("new.jsonl", [{"id": 1, "current": True}])
+
+        # Act
+        with diff(
+            old,
+            new,
+            key="id",
+            duplicates="first",
+            schema_diff=True,
+            parallel=True,
+        ) as result:
+            summary = result.summary
+            duplicates = list(result.duplicates())
+            schema_changes = list(result.schema_changes())
+
+        # Assert
+        assert summary.modified == 1
+        assert summary.old_duplicates == 1
+        assert [duplicate.source for duplicate in duplicates] == ["OLD"]
+        assert [(change.operation, change.path) for change in schema_changes] == [
+            (SchemaChangeOperation.FIELD_ADDED, "/current"),
+            (SchemaChangeOperation.FIELD_REMOVED, "/legacy"),
+        ]
+
+    def test_parallel_index_preserves_old_error_precedence(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}, '{"id":'])
+        new = write_jsonl("new.jsonl", ['{"id":'])
+
+        # Act
+        with pytest.raises(InputError) as captured:
+            with diff(old, new, key="id", parallel=True):
+                pass
+
+        # Assert
+        assert captured.value.source == "OLD"
+        assert captured.value.line == 2
+
+    def test_parallel_index_reports_new_input_errors(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}, '{"id":'])
+        result = diff(old, new, key="id", parallel=True)
+
+        # Act
+        with pytest.raises(InputError) as captured:
+            with result:
+                pass
+
+        # Assert
+        assert captured.value.source == "NEW"
+        assert captured.value.line == 2
+        assert result._workspace is None
+
+    def test_parallel_index_preserves_duplicate_diagnostics(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}, {"id": 1}])
+        new = write_jsonl("new.jsonl", [])
+
+        # Act
+        with pytest.raises(DuplicateKeyError) as captured:
+            with diff(old, new, key="id", parallel=True):
+                pass
+
+        # Assert
+        assert captured.value.source == "OLD"
+        assert captured.value.lines == (1, 2)
+
+    def test_parallel_index_supports_compiled_where_expression(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "active": True}, {"id": 2, "active": False}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "active": True}])
+
+        # Act
+        with diff(
+            old,
+            new,
+            key="id",
+            where="active == `true`",
+            parallel=True,
+        ) as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+
+    @pytest.mark.parametrize(
+        "old,new",
+        [
+            (io.BytesIO(b'{"id":1}\n'), io.BytesIO(b'{"id":1}\n')),
+            ("https://example.test/old.jsonl", "https://example.test/new.jsonl"),
+        ],
+    )
+    def test_parallel_index_rejects_non_local_sources(self, old, new):
+        # Act / Assert
+        with pytest.raises(ConfigurationError, match="two local path sources"):
+            diff(old, new, key="id", parallel=True)
+
+    def test_parallel_index_rejects_max_temp(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [])
+        new = write_jsonl("new.jsonl", [])
+
+        # Act / Assert
+        with pytest.raises(ConfigurationError, match="cannot be combined"):
+            diff(old, new, key="id", parallel=True, max_temp=1024)

@@ -27,6 +27,21 @@ def _different_sources(write_jsonl):
 
 
 class TestCliExitCodes:
+    def test_parallel_compares_local_inputs(self, write_jsonl, capsys):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}, {"id": 2}])
+
+        # Act
+        exit_code = main(
+            [str(old), str(new), "--key", "id", "--parallel"],
+        )
+        captured = capsys.readouterr()
+
+        # Assert
+        assert exit_code == 1
+        assert "added:     1" in captured.out
+
     def test_json_format_compares_array_inputs(self, tmp_path, capsys):
         # Arrange
         old = tmp_path / "old.json"

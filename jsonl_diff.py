@@ -4,12 +4,13 @@ import argparse
 import hashlib
 import json
 import math
+import multiprocessing
 import os
 import sqlite3
 import sys
 import tempfile
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from decimal import Decimal
 from enum import Enum
 from json.encoder import encode_basestring as _encode_basestring
@@ -79,6 +80,7 @@ class InputError(JsonlDiffError):
     """Raised when an input source or record is invalid."""
 
     def __init__(self, message: str, source: str, line: Optional[int] = None):
+        self.message = message
         self.source = source
         self.line = line
         location = " in {}".format(source)
@@ -274,6 +276,17 @@ class DiffConfig:
     schema_ignore: Tuple[str, ...] = ()
     format: str = "jsonl"
     missing_key: MissingKeyPolicy = MissingKeyPolicy.ERROR
+    parallel: bool = False
+
+
+@dataclass(frozen=True)
+class _WorkerError:
+    kind: str
+    message: str
+    source: Optional[str] = None
+    line: Optional[int] = None
+    key: Optional[IdentityKey] = None
+    lines: Tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -703,6 +716,89 @@ class DiffResult:
             self.close()
             raise ResourceError("could not create the temporary index") from error
 
+    def _open_parallel(self):
+        try:
+            self._workspace = tempfile.TemporaryDirectory(prefix="jsonl-diff-")
+        except OSError as error:
+            raise ResourceError("could not create the temporary index") from error
+
+        old_database = os.path.join(self._workspace.name, "old.sqlite3")
+        new_database = os.path.join(self._workspace.name, "new.sqlite3")
+        self._run_parallel_workers(old_database, new_database)
+        self._combine_parallel_indexes(old_database, new_database)
+
+    def _run_parallel_workers(self, old_database: str, new_database: str):
+        context = multiprocessing.get_context("spawn")
+        try:
+            pool = context.Pool(processes=2)
+        except (OSError, RuntimeError) as error:
+            raise ResourceError("could not start parallel index workers") from error
+
+        try:
+            results = self._start_parallel_workers(pool, old_database, new_database)
+            self._await_parallel_workers(results)
+        except BaseException as error:
+            pool.terminate()
+            pool.join()
+            if isinstance(error, JsonlDiffError) or not isinstance(error, Exception):
+                raise
+            raise ResourceError("parallel indexing failed") from error
+        else:
+            pool.close()
+            pool.join()
+
+    def _start_parallel_workers(
+        self,
+        pool: Any,
+        old_database: str,
+        new_database: str,
+    ) -> Tuple[Any, Any]:
+        worker_config = replace(self.config, where_expression=None)
+        return (
+            pool.apply_async(
+                _parallel_index_worker,
+                (self._old, 0, worker_config, old_database),
+            ),
+            pool.apply_async(
+                _parallel_index_worker,
+                (self._new, 1, worker_config, new_database),
+            ),
+        )
+
+    @staticmethod
+    def _await_parallel_workers(results: Tuple[Any, Any]):
+        for result in results:
+            error = result.get()
+            if error is not None:
+                _raise_worker_error(error)
+
+    def _combine_parallel_indexes(self, old_database: str, new_database: str):
+        try:
+            self._connection = sqlite3.connect(old_database)
+            self._configure_database()
+            self._merge_new_index(new_database)
+        except (OSError, sqlite3.Error) as error:
+            raise ResourceError("could not combine parallel indexes") from error
+
+    def _merge_new_index(self, new_database: str):
+        self._connection.execute("ATTACH DATABASE ? AS new_index", (new_database,))
+        with self._connection:
+            self._connection.execute(
+                "INSERT INTO records SELECT * FROM new_index.records",
+            )
+            self._connection.execute(
+                "INSERT INTO duplicate_records SELECT * FROM new_index.duplicate_records",
+            )
+            if self.config.schema_diff:
+                self._connection.execute(
+                    "INSERT INTO schema_fields SELECT * FROM new_index.schema_fields",
+                )
+                self._connection.execute(
+                    "INSERT INTO schema_objects SELECT * FROM new_index.schema_objects",
+                )
+        self._connection.execute("DETACH DATABASE new_index")
+        os.remove(new_database)
+
     def _configure_database(self):
         self._connection.execute("PRAGMA journal_mode = OFF")
         self._connection.execute("PRAGMA synchronous = OFF")
@@ -1028,14 +1124,20 @@ class DiffResult:
             raise RuntimeError("the diff result cannot be entered more than once")
         self._started = True
         try:
-            self._open()
-            self._index(self._old, 0)
-            self._index(self._new, 1)
+            self._build_index()
             self._summary_value = self._calculate_summary()
             return self
         except BaseException:
             self.close()
             raise
+
+    def _build_index(self):
+        if self.config.parallel:
+            self._open_parallel()
+        else:
+            self._open()
+            self._index(self._old, 0)
+            self._index(self._new, 1)
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any):
         self.close()
@@ -1301,6 +1403,81 @@ class DiffResult:
         )
 
 
+def _worker_error(error: BaseException) -> _WorkerError:
+    if isinstance(error, DuplicateKeyError):
+        return _WorkerError(
+            "duplicate",
+            error.message,
+            error.source,
+            error.line,
+            error.key,
+            error.lines,
+        )
+    elif isinstance(error, InputError):
+        return _WorkerError("input", error.message, error.source, error.line)
+    elif isinstance(error, ResourceError):
+        return _WorkerError("resource", str(error))
+    return _WorkerError(
+        "unexpected",
+        "parallel index worker failed ({}): {}".format(
+            type(error).__name__,
+            error,
+        ),
+    )
+
+
+def _parallel_index_worker(
+    source: Any,
+    side: int,
+    config: DiffConfig,
+    database: str,
+) -> Optional[_WorkerError]:
+    result = DiffResult(source, source, config)
+    try:
+        _build_worker_index(result, source, side, config, database)
+    except BaseException as error:
+        return _worker_error(error)
+    finally:
+        if result._connection is not None:
+            result._connection.close()
+            result._connection = None
+    return None
+
+
+def _build_worker_index(
+    result: DiffResult,
+    source: Any,
+    side: int,
+    config: DiffConfig,
+    database: str,
+):
+    if config.where is not None:
+        result._where = _compile_where(config.where)
+    result._connection = sqlite3.connect(database)
+    result._configure_database()
+    result._create_schema()
+    result._index(source, side)
+
+
+def _raise_worker_error(error: _WorkerError):
+    if error.kind == "duplicate":
+        raise DuplicateKeyError(error.key, error.source, error.lines)
+    elif error.kind == "input":
+        raise InputError(error.message, error.source, error.line)
+    raise ResourceError(error.message)
+
+
+def _is_local_path_source(source: Any) -> bool:
+    try:
+        path = os.fspath(source)
+    except TypeError:
+        return False
+    return not (
+        isinstance(path, str)
+        and path.lower().startswith(("http://", "https://"))
+    )
+
+
 def _configuration(
     key: Union[str, Sequence[str]],
     ignore: Sequence[str],
@@ -1311,6 +1488,7 @@ def _configuration(
     schema_ignore: Sequence[str],
     input_format: str,
     missing_key: Union[str, MissingKeyPolicy] = MissingKeyPolicy.ERROR,
+    parallel: bool = False,
 ) -> DiffConfig:
     keys = (key,) if isinstance(key, str) else tuple(key)
     if not keys or any(not isinstance(name, str) or not name for name in keys):
@@ -1344,6 +1522,10 @@ def _configuration(
 
     if input_format not in ("jsonl", "json"):
         raise ConfigurationError("invalid format {!r}".format(input_format))
+    if not isinstance(parallel, bool):
+        raise ConfigurationError("parallel must be a boolean")
+    if parallel and max_temp is not None:
+        raise ConfigurationError("parallel cannot be combined with max_temp")
 
     return DiffConfig(
         key=keys,
@@ -1356,6 +1538,7 @@ def _configuration(
         schema_diff=schema_diff,
         schema_ignore=schema_ignores,
         format=input_format,
+        parallel=parallel,
     )
 
 
@@ -1372,6 +1555,7 @@ def diff(
     schema_diff: bool = False,
     schema_ignore: Sequence[str] = (),
     format: str = "jsonl",  # noqa: A002
+    parallel: bool = False,
 ) -> DiffResult:
     """Create a context-managed, disk-backed comparison."""
     config = _configuration(
@@ -1384,7 +1568,15 @@ def diff(
         schema_ignore,
         format,
         missing_key,
+        parallel,
     )
+    if parallel and not (
+        _is_local_path_source(old) and _is_local_path_source(new)
+    ):
+        raise ConfigurationError("parallel requires two local path sources")
+    if parallel:
+        old = os.fspath(old)
+        new = os.fspath(new)
     return DiffResult(old, new, config)
 
 
@@ -1534,6 +1726,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--schema-ignore", action="append", default=[], metavar="POINTER")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--max-temp", type=int)
+    parser.add_argument("--parallel", action="store_true")
     parser.add_argument("--format", choices=("jsonl", "json"), default="jsonl")
     return parser
 
@@ -1551,6 +1744,7 @@ def _run_comparison(arguments: argparse.Namespace, old: Any, new: Any, keys: Tup
         schema_diff=arguments.schema_diff,
         schema_ignore=arguments.schema_ignore,
         format=arguments.format,
+        parallel=arguments.parallel,
     ) as result:
         if arguments.details:
             _write_details(result, arguments.details)
