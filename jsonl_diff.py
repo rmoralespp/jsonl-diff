@@ -84,12 +84,6 @@ class InputError(JsonlDiffError):
             location += " at line {}".format(line)
         super().__init__("{}{}".format(message, location))
 
-    def __reduce__(self) -> Tuple[Any, ...]:
-        # The default reduction would replay `args` (the already formatted
-        # message) through `__init__`, which needs `source` too. Parallel
-        # indexing ships these across a process boundary, so reduce explicitly.
-        return (_rebuild_input_error, (type(self), str(self), self.source, self.line))
-
 
 class DuplicateKeyError(InputError):
     """Raised when an identity occurs more than once in one source."""
@@ -103,22 +97,6 @@ class DuplicateKeyError(InputError):
             ", ".join(str(line) for line in lines),
         )
         super().__init__(message, source)
-
-    def __reduce__(self) -> Tuple[Any, ...]:
-        return (DuplicateKeyError, (self.key, self.source, self.lines))
-
-
-def _rebuild_input_error(
-    class_: type,
-    message: str,
-    source: str,
-    line: Optional[int],
-) -> InputError:
-    error = class_.__new__(class_)
-    Exception.__init__(error, message)
-    error.source = source
-    error.line = line
-    return error
 
 
 class ResourceError(JsonlDiffError):
@@ -706,26 +684,20 @@ def _multiprocessing_context() -> Any:
     # `fork` skips a second interpreter startup and re-import of ijson,
     # jmespath and msgspec, which would otherwise cost more than the work
     # saved on small inputs. It is only safe while this process is
-    # single-threaded, so a threaded embedder falls back to a start method
-    # that builds the child from scratch.
-    methods = multiprocessing.get_all_start_methods()
-    if "fork" in methods and threading.active_count() == 1:
-        name = "fork"
-    elif "forkserver" in methods:
-        name = "forkserver"
-    else:
-        name = "spawn"
-    return multiprocessing.get_context(name)
+    # single-threaded, so a threaded embedder builds the child from scratch.
+    single_threaded = threading.active_count() == 1
+    if single_threaded and "fork" in multiprocessing.get_all_start_methods():
+        return multiprocessing.get_context("fork")
+    return multiprocessing.get_context("spawn")
 
 
-def _index_worker(
-    db_path: str,
-    source: str,
-    side: int,
-    config: "DiffConfig",
-    sender: Any,
-) -> None:
-    """Index one side into a private database and report the outcome."""
+def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") -> None:
+    """Index one side into a private database, or exit non-zero on failure.
+
+    Nothing is reported back: the parent detects failure from the exit status
+    and re-raises by re-indexing sequentially, which reproduces the original
+    exception exactly rather than shipping a copy of it across processes.
+    """
     result = None
     try:
         if config.where is not None:
@@ -734,24 +706,13 @@ def _index_worker(
         result._open_connection(db_path)
         result._index(source, side)
         result._connection.commit()
-    except BaseException as error:  # noqa: BLE001 - relayed to the parent
-        outcome = error
-    else:
-        outcome = None
-    finally:
+    except BaseException:  # noqa: BLE001 - the parent reproduces this
         if result is not None:
             result.close()
-    try:
-        sender.send(outcome)
-    except Exception:  # noqa: BLE001 - the original error is not picklable
-        sender.send(
-            InputError(
-                "invalid input ({})".format(type(outcome).__name__),
-                "OLD" if side == 0 else "NEW",
-            ),
-        )
-    finally:
-        sender.close()
+        # Exit without unwinding so the traceback never reaches stderr; the
+        # parent raises the real error itself.
+        os._exit(1)
+    result.close()
 
 
 class DiffResult:
@@ -1354,44 +1315,42 @@ class DiffResult:
         config = replace(self.config, where_expression=None)
         workers = []
         for side, source in enumerate((self._old, self._new)):
-            receiver, sender = context.Pipe(duplex=False)
             process = context.Process(
                 target=_index_worker,
-                args=(paths[side], os.fspath(source), side, config, sender),
+                args=(paths[side], os.fspath(source), side, config),
                 daemon=True,
             )
             process.start()
-            sender.close()
-            workers.append((process, receiver))
+            workers.append(process)
 
-        errors = []
-        for side, (process, receiver) in enumerate(workers):
-            try:
-                error = receiver.recv()
-            except EOFError:
-                error = ResourceError(
-                    "the {} indexing worker died".format("OLD" if side == 0 else "NEW"),
-                )
-            finally:
-                receiver.close()
-                process.join()
-            errors.append(error)
-        # Report OLD before NEW so failures stay deterministic and match the
-        # sequential ordering.
-        for error in errors:
-            if error is not None:
-                raise error
+        failed = False
+        for process in workers:
+            process.join()
+            failed = failed or process.exitcode != 0
 
         try:
             self._open_connection(os.path.join(self._workspace.name, "index.sqlite3"))
-            self._merge_worker_databases(paths)
+            if not failed:
+                self._merge_worker_databases(paths)
         except (OSError, sqlite3.Error) as error:
             raise ResourceError("could not build the temporary index") from error
-        for path in paths:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
+        finally:
+            for path in paths:
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+
+        if failed:
+            # A worker exited non-zero, so its database holds only the records
+            # read before it stopped; merging that would yield a well-formed
+            # but silently truncated diff. Index sequentially instead: the same
+            # input raises the same error here, with the exact message, line
+            # and OLD-before-NEW ordering the sequential path always produced.
+            # A failure that does not reproduce was transient, and this pass
+            # simply succeeds.
+            self._index(self._old, 0)
+            self._index(self._new, 1)
 
     def _merge_worker_databases(self, paths: Sequence[str]) -> None:
         tables = ["records", "duplicate_records"]
