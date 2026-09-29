@@ -160,56 +160,62 @@ jsonl-diff CLI, which is safe to re-import:
 
 ## What still needs checking on Windows
 
-Everything below was verified on Linux, and the `spawn` path was exercised by
+Everything here was verified on Linux, with the `spawn` path exercised by
 patching `_can_fork()` to return `False`. None of it has run on real Windows.
 
-Note what is **not** worth testing: comparing parallel against sequential
-output on Windows. Both sides run the same indexing code on the same platform,
-so any Windows-wide behaviour affects them equally and cancels out, and there
-is no mechanism by which the merge alone would produce different rows. The
-`spawn` code path — `DiffConfig` pickling, re-importing the module in the child
-— is already covered on Linux. A single run is still worth doing as a smoke
-test that the tool works at all, but it is not a correctness check.
+The list is short on purpose. Three things that look like Windows risks are
+not:
 
-1. **Entry point detection.** This is the one thing that can go wrong on
-   Windows and nowhere else, and it fails *silently* by falling back to
-   sequential indexing. `_cli_entry_point()` no longer matches file names; it
-   checks whether `__main__.main` is this module's `main`, which holds for
-   `python -m jsonl_diff`, for a `jsonl-diff.exe` launcher and for a
-   `jsonl-diff-script.py` shim. Confirm both installed entry points are
-   recognised:
+- **Comparing parallel against sequential output there.** Both sides run the
+  same indexing code on the same platform, so any Windows-wide behaviour
+  affects them equally and cancels out; there is no mechanism by which the
+  merge alone would produce different rows. The `spawn` path itself —
+  `DiffConfig` pickling, re-importing the module in the child — is already
+  covered on Linux. Worth one run as a smoke test, but it is not a correctness
+  check.
+- **Temporary files being left behind.** This lifecycle is unchanged from
+  `main`: the workspace is a `TemporaryDirectory` removed by `close()`. The
+  branch only adds two files inside it and unlinks them early. If that unlink
+  ever fails on Windows the workspace still removes them; the sole consequence
+  is that peak disk stays high for the rest of the run.
+- **A SQLite handle blocking cleanup.** `close()` closes the connection before
+  `TemporaryDirectory.cleanup()`, both workers have exited and been joined by
+  then, and `journal_mode = OFF` means SQLite never creates `-journal` or
+  `-wal` side files — the workspace only ever holds `index.sqlite3` plus the
+  two worker databases. A cleanup failure could only come from an external
+  handle (antivirus, search indexer, backup agent) on a file under `%TEMP%`,
+  which is transient and already reported as `could not remove temporary
+  files`.
+
+What genuinely needs a Windows machine:
+
+1. **Entry point detection.** The one thing that can go wrong on Windows and
+   nowhere else, and it fails *silently* by falling back to sequential
+   indexing. `_cli_entry_point()` checks whether `__main__.main` is this
+   module's `main`, which holds for `python -m jsonl_diff`, for a
+   `jsonl-diff.exe` launcher and for a `jsonl-diff-script.py` shim. Confirm
+   both installed entry points are recognised:
 
    ```
    python -m jsonl_diff ...
    jsonl-diff ...
    ```
 
-   Instrument `_parallel_eligible()` or compare wall time against
-   `JSONL_DIFF_PARALLEL=0`; a large file should be clearly faster.
+   Instrument `_parallel_eligible()`, or compare wall time against
+   `JSONL_DIFF_PARALLEL=0` on a large file.
 
-2. **Temporary file removal.** The worker databases are unlinked after the
-   merge purely to halve peak disk; the unlink is wrapped in
-   `contextlib.suppress(OSError)`, so a Windows failure would be silent and
-   harmless. Confirm that `%TEMP%\jsonl-diff-*` is gone after a run, and that
-   disk use drops at the merge rather than staying at the merge-time peak (see
-   the table above).
-
-3. **`TemporaryDirectory` cleanup.** If any SQLite handle is still open,
-   cleanup raises and is reported through `warnings.warn`. Check that no
-   `could not remove temporary files` warning appears.
-
-4. **The unguarded-embedder path.** Run a script that calls `jsonl_diff.diff()`
+2. **The unguarded-embedder path.** Run a script that calls `jsonl_diff.diff()`
    at module level with no `if __name__ == "__main__":` guard. Expected: no
-   workers are started at all (the gate declines), so no child traceback is
-   printed and the result is correct. With `JSONL_DIFF_PARALLEL=1` the gate is
-   bypassed and the child traceback **is** expected, followed by a correct
+   workers are started at all, because the gate declines, so no child traceback
+   is printed and the result is correct. With `JSONL_DIFF_PARALLEL=1` the gate
+   is bypassed and the child traceback **is** expected, followed by a correct
    result from the sequential retry.
 
-5. **A frozen build**, if one is ever produced. `spawn` on Windows requires
+3. **A frozen build**, if one is ever produced. `spawn` on Windows requires
    `multiprocessing.freeze_support()` in the frozen entry point. The CLI does
    not call it today.
 
-6. **Timings.** None of the numbers in this document were produced on Windows.
+4. **Timings.** None of the numbers in this document were produced on Windows.
    Process creation is considerably more expensive there, so the small-file
    figures in particular may not hold, and the 6 k-record case may well be
    slower than sequential.
