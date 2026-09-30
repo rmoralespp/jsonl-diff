@@ -6,6 +6,7 @@ import io
 import lzma
 import sys
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -333,7 +334,10 @@ class TestParallelIndexing:
             "old.jsonl",
             [{"id": 1, "legacy": True}, {"id": 1, "legacy": True}],
         )
-        new = write_jsonl("new.jsonl", [{"id": 1, "current": True}])
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "current": True}, {"id": 1, "current": True}],
+        )
 
         # Act
         with diff(
@@ -351,11 +355,41 @@ class TestParallelIndexing:
         # Assert
         assert summary.modified == 1
         assert summary.old_duplicates == 1
-        assert [duplicate.source for duplicate in duplicates] == ["OLD"]
+        assert summary.new_duplicates == 1
+        assert [duplicate.source for duplicate in duplicates] == ["OLD", "NEW"]
         assert [(change.operation, change.path) for change in schema_changes] == [
             (SchemaChangeOperation.FIELD_ADDED, "/current"),
             (SchemaChangeOperation.FIELD_REMOVED, "/legacy"),
         ]
+
+    def test_parallel_index_keeps_both_databases_attached_until_close(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 2}])
+        result = diff(old, new, key="id", parallel=True)
+
+        # Act
+        with result:
+            workspace = Path(result._workspace.name)
+            databases = {
+                name: Path(path)
+                for _sequence, name, path in result._connection.execute(
+                    "PRAGMA database_list",
+                )
+            }
+            old_count = result._connection.execute(
+                "SELECT COUNT(*) FROM records WHERE side = 0",
+            ).fetchone()[0]
+            new_count = result._connection.execute(
+                "SELECT COUNT(*) FROM new_index.records WHERE side = 1",
+            ).fetchone()[0]
+
+        # Assert
+        assert {"main", "new_index"} <= set(databases)
+        assert databases["main"].name == "old.sqlite3"
+        assert databases["new_index"].name == "new.sqlite3"
+        assert old_count == new_count == 1
+        assert not workspace.exists()
 
     def test_parallel_index_preserves_old_error_precedence(self, write_jsonl):
         # Arrange

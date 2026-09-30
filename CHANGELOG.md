@@ -3,7 +3,8 @@
 ## Unreleased
 
 * **Added:** Opt-in process-based parallel indexing for large local inputs via
-  `--parallel` and `parallel=True`.
+  `--parallel` and `parallel=True`. OLD and NEW remain as separate attached
+  SQLite indexes, avoiding a post-index copy and its temporary-storage spike.
 
 ## v0.1.5
 

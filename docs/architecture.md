@@ -28,9 +28,9 @@ stored fingerprints and do not require retaining or rereading full records.
 
 With `parallel=True` / `--parallel`, two spawned worker processes index local
 OLD and NEW path sources concurrently into separate SQLite databases. After
-both inputs pass validation, the OLD database becomes the result database,
-the NEW database is attached, and its rows are copied into OLD. Existing
-summary and iterator queries then use the combined database unchanged.
+both inputs pass validation, the parent opens the OLD database and attaches
+the NEW database. Summary, change, duplicate, and schema queries read both
+indexes directly; records are not copied between them.
 
 This mode is opt-in because process startup is slower for small inputs. It
 requires two local path sources and cannot currently be combined with
@@ -42,11 +42,10 @@ worker is terminated and joined before the workspace is removed. Worker
 failures are transported as serializable internal data and reconstructed as
 the existing public exception types in the parent process.
 
-While workers run, temporary storage is the sum of both side indexes. During
-the one-sided merge, the OLD database grows toward the final combined size
-while the NEW database still exists, so peak usage can approach roughly three
-single-side indexes. The NEW database is removed immediately after a
-successful merge.
+Temporary storage is the sum of both side indexes for the lifetime of the
+open result. Avoiding a combined copy keeps peak usage close to the final
+two-index size. The 64 MiB page-cache budget used by sequential comparisons is
+split equally between OLD and NEW while parallel results are read.
 
 ## Observed-schema profile
 

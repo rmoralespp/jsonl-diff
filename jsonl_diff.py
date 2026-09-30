@@ -58,6 +58,7 @@ _DIGEST_INTEGRAL_LIMIT = 4300
 _SIZE_CHECK_INTERVAL = 1024
 # Records are inserted in batches to amortize per-statement overhead.
 _INSERT_BATCH = 2048
+_CACHE_SIZE_KIB = 64 * 1024
 _SCHEMA_TYPE_INDEXES = {
     "boolean": 3,
     "integer": 4,
@@ -725,7 +726,7 @@ class DiffResult:
         old_database = os.path.join(self._workspace.name, "old.sqlite3")
         new_database = os.path.join(self._workspace.name, "new.sqlite3")
         self._run_parallel_workers(old_database, new_database)
-        self._combine_parallel_indexes(old_database, new_database)
+        self._attach_parallel_indexes(old_database, new_database)
 
     def _run_parallel_workers(self, old_database: str, new_database: str):
         context = multiprocessing.get_context("spawn")
@@ -772,32 +773,20 @@ class DiffResult:
             if error is not None:
                 _raise_worker_error(error)
 
-    def _combine_parallel_indexes(self, old_database: str, new_database: str):
+    def _attach_parallel_indexes(self, old_database: str, new_database: str):
         try:
             self._connection = sqlite3.connect(old_database)
-            self._configure_database()
-            self._merge_new_index(new_database)
+            self._configure_parallel_reads(new_database)
         except (OSError, sqlite3.Error) as error:
-            raise ResourceError("could not combine parallel indexes") from error
+            raise ResourceError("could not attach parallel indexes") from error
 
-    def _merge_new_index(self, new_database: str):
+    def _configure_parallel_reads(self, new_database: str):
+        side_cache = _CACHE_SIZE_KIB // 2
         self._connection.execute("ATTACH DATABASE ? AS new_index", (new_database,))
-        with self._connection:
-            self._connection.execute(
-                "INSERT INTO records SELECT * FROM new_index.records",
-            )
-            self._connection.execute(
-                "INSERT INTO duplicate_records SELECT * FROM new_index.duplicate_records",
-            )
-            if self.config.schema_diff:
-                self._connection.execute(
-                    "INSERT INTO schema_fields SELECT * FROM new_index.schema_fields",
-                )
-                self._connection.execute(
-                    "INSERT INTO schema_objects SELECT * FROM new_index.schema_objects",
-                )
-        self._connection.execute("DETACH DATABASE new_index")
-        os.remove(new_database)
+        self._connection.execute("PRAGMA temp_store = FILE")
+        self._connection.execute("PRAGMA main.cache_size = -{}".format(side_cache))
+        self._connection.execute("PRAGMA new_index.cache_size = -{}".format(side_cache))
+        self._connection.execute("PRAGMA query_only = ON")
 
     def _configure_database(self):
         self._connection.execute("PRAGMA journal_mode = OFF")
@@ -811,7 +800,9 @@ class DiffResult:
             # A larger page cache speeds bulk index writes and the summary read.
             # Skipped under max_temp so on-disk growth stays observable and the
             # workspace memory footprint remains bounded.
-            self._connection.execute("PRAGMA cache_size = -65536")
+            self._connection.execute(
+                "PRAGMA cache_size = -{}".format(_CACHE_SIZE_KIB),
+            )
 
     def _create_schema(self):
         self._connection.execute(
@@ -929,12 +920,22 @@ class DiffResult:
         requested = None if operation is None else ChangeOperation(operation)
         query = """
             SELECT identity, line, length, digest
-            FROM records
+            FROM {records}
             WHERE side = ?
             ORDER BY identity
         """
-        old_records = iter(self._connection.execute(query, (0,)))
-        new_records = iter(self._connection.execute(query, (1,)))
+        old_records = iter(
+            self._connection.execute(
+                query.format(records=self._side_table("records", 0)),
+                (0,),
+            ),
+        )
+        new_records = iter(
+            self._connection.execute(
+                query.format(records=self._side_table("records", 1)),
+                (1,),
+            ),
+        )
         old_record = next(old_records, None)
         new_record = next(new_records, None)
         while old_record is not None or new_record is not None:
@@ -1021,6 +1022,8 @@ class DiffResult:
                     yield change
 
     def _schema_profiles(self, side: int) -> Iterator[SchemaFieldProfile]:
+        fields = self._side_table("schema_fields", side)
+        objects = self._side_table("schema_objects", side)
         rows = self._connection.execute(
             """
             SELECT
@@ -1034,12 +1037,12 @@ class DiffResult:
                 f.strings,
                 f.objects,
                 f.arrays
-            FROM schema_fields AS f
-            JOIN schema_objects AS p
+            FROM {fields} AS f
+            JOIN {objects} AS p
               ON p.side = f.side AND p.path = f.parent_path
             WHERE f.side = ?
             ORDER BY f.path
-            """,
+            """.format(fields=fields, objects=objects),
             (side,),
         )
         for row in rows:
@@ -1058,18 +1061,38 @@ class DiffResult:
         """Iterate discarded duplicate occurrences in deterministic order."""
         if self._connection is None:
             raise RuntimeError("the diff result is closed")
+        old_duplicates = self._side_table("duplicate_records", 0)
+        old_records = self._side_table("records", 0)
+        new_duplicates = self._side_table("duplicate_records", 1)
+        new_records = self._side_table("records", 1)
         rows = self._connection.execute(
             """
             SELECT
-                d.side,
-                d.identity,
-                r.line,
-                d.line,
-                d.length = r.length AND d.digest = r.digest
-            FROM duplicate_records AS d
-            JOIN records AS r USING (side, identity)
-            ORDER BY d.side, d.identity, d.line
-            """,
+                d.side AS side,
+                d.identity AS identity,
+                r.line AS selected_line,
+                d.line AS discarded_line,
+                d.length = r.length AND d.digest = r.digest AS content_equal
+            FROM {old_duplicates} AS d
+            JOIN {old_records} AS r USING (side, identity)
+            WHERE d.side = 0
+            UNION ALL
+            SELECT
+                d.side AS side,
+                d.identity AS identity,
+                r.line AS selected_line,
+                d.line AS discarded_line,
+                d.length = r.length AND d.digest = r.digest AS content_equal
+            FROM {new_duplicates} AS d
+            JOIN {new_records} AS r USING (side, identity)
+            WHERE d.side = 1
+            ORDER BY side, identity, discarded_line
+            """.format(
+                old_duplicates=old_duplicates,
+                old_records=old_records,
+                new_duplicates=new_duplicates,
+                new_records=new_records,
+            ),
         )
         for side, identity, selected_line, discarded_line, content_equal in rows:
             source = "OLD" if side == 0 else "NEW"
@@ -1080,6 +1103,11 @@ class DiffResult:
                 SourceLocation(source, discarded_line),
                 bool(content_equal),
             )
+
+    def _side_table(self, table: str, side: int) -> str:
+        if self.config.parallel and side == 1:
+            return "new_index.{}".format(table)
+        return table
 
     def _change(
         self,
@@ -1354,26 +1382,35 @@ class DiffResult:
         # counts, instead of running the join twice and two anti-joins. Every
         # access uses the (side, identity) primary key, and the arithmetic below
         # recovers added/deleted/modified without extra scans.
+        old_records = self._side_table("records", 0)
+        new_records = self._side_table("records", 1)
+        old_duplicates = self._side_table("duplicate_records", 0)
+        new_duplicates = self._side_table("duplicate_records", 1)
         row = self._connection.execute(
             """
             SELECT
-                (SELECT COUNT(*) FROM records WHERE side = 0),
-                (SELECT COUNT(*) FROM records WHERE side = 1),
+                (SELECT COUNT(*) FROM {old_records} WHERE side = 0),
+                (SELECT COUNT(*) FROM {new_records} WHERE side = 1),
                 matches.matched,
                 matches.equal,
-                (SELECT COUNT(*) FROM duplicate_records WHERE side = 0),
-                (SELECT COUNT(*) FROM duplicate_records WHERE side = 1)
+                (SELECT COUNT(*) FROM {old_duplicates} WHERE side = 0),
+                (SELECT COUNT(*) FROM {new_duplicates} WHERE side = 1)
             FROM (
                 SELECT
                     COUNT(*) AS matched,
                     COALESCE(
                         SUM(o.length = n.length AND o.digest = n.digest), 0
                     ) AS equal
-                FROM records AS o
-                JOIN records AS n
+                FROM {old_records} AS o
+                JOIN {new_records} AS n
                   ON o.side = 0 AND n.side = 1 AND o.identity = n.identity
             ) AS matches
-            """,
+            """.format(
+                old_records=old_records,
+                new_records=new_records,
+                old_duplicates=old_duplicates,
+                new_duplicates=new_duplicates,
+            ),
         ).fetchone()
         total_old, total_new, matched, equal, old_dups, new_dups = (int(value or 0) for value in row)
         added = total_new - matched
@@ -1403,7 +1440,7 @@ class DiffResult:
         )
 
 
-def _worker_error(error: BaseException) -> _WorkerError:
+def _worker_error(error: Exception) -> _WorkerError:
     if isinstance(error, DuplicateKeyError):
         return _WorkerError(
             "duplicate",
@@ -1435,7 +1472,7 @@ def _parallel_index_worker(
     result = DiffResult(source, source, config)
     try:
         _build_worker_index(result, source, side, config, database)
-    except BaseException as error:
+    except Exception as error:
         return _worker_error(error)
     finally:
         if result._connection is not None:
