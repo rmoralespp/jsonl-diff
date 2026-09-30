@@ -32,6 +32,17 @@ both inputs pass validation, the parent opens the OLD database and attaches
 the NEW database. Summary, change, duplicate, and schema queries read both
 indexes directly; records are not copied between them.
 
+```text
+worker OLD -> old.sqlite3 --\
+                             +-> parent connection -> summary / iterators
+worker NEW -> new.sqlite3 --/
+```
+
+Separate files are required because SQLite permits only one writer per
+database, even when writers target different tables. Once the workers finish,
+the parent is read-only: OLD is the `main` schema and NEW is attached as
+`new_index`.
+
 This mode is opt-in because process startup is slower for small inputs. It
 requires two local path sources and cannot currently be combined with
 `max_temp`; HTTP/HTTPS, stdin, and file-like sources use the default sequential
@@ -40,12 +51,17 @@ mode. Compressed local paths remain supported.
 Errors retain deterministic OLD-before-NEW precedence. If OLD fails, the NEW
 worker is terminated and joined before the workspace is removed. Worker
 failures are transported as serializable internal data and reconstructed as
-the existing public exception types in the parent process.
+the existing public exception types in the parent process. No summary or
+details output is exposed until both workers have completed successfully.
 
 Temporary storage is the sum of both side indexes for the lifetime of the
 open result. Avoiding a combined copy keeps peak usage close to the final
 two-index size. The 64 MiB page-cache budget used by sequential comparisons is
 split equally between OLD and NEW while parallel results are read.
+
+Parallel mode changes execution only. Identity ordering, fingerprints,
+duplicate selection, physical locations, schema profiles, summaries, and
+details output have the same semantics as sequential mode.
 
 ## Observed-schema profile
 
@@ -76,6 +92,11 @@ raises `ResourceError` (CLI exit `2`) when the workspace is observed above the
 configured budget. Choose a limit with room for SQLite pages and index
 overhead.
 
+Parallel indexing currently rejects `max_temp`: each worker owns an
+independent SQLite connection, so enforcing one deterministic shared budget
+would require cross-process accounting. Use sequential mode when `max_temp`
+accounting is required.
+
 The filesystem-level check (stat-ing every workspace file) runs every 1024
 inserted records per side, plus once more after each side finishes, rather
 than after every record; this keeps large-input indexing fast. SQLite's own
@@ -93,7 +114,9 @@ exceed the configured value.
 
 The private workspace is removed on context-manager exit, explicit `close()`,
 or a handled failure during construction. Cleanup failures are emitted as
-warnings rather than replacing the primary error.
+warnings rather than replacing the primary error. For parallel results, the
+parent connection is closed first so both attached database handles are
+released before the workspace is removed; this is required on Windows.
 
 ## Sources and compression
 
@@ -103,16 +126,19 @@ JSONL input is decoded by `py-jsonl`; `--format json` opens the same
 decompressed byte stream with `py-jsonl.open_stream()` and parses top-level
 array elements incrementally with `ijson`.
 
-| Source             |       CLI        |           Python API            |
-|---------------------|:----------------:|:--------------------------------:|
-| Local path         |       Yes        | Yes, including path-like values |
-| HTTP/HTTPS URL     |       Yes        |               Yes               |
-| File-like object   |        No        |               Yes               |
-| gzip (`.gz`)       |       Yes        |               Yes               |
-| bzip2 (`.bz2`)     |       Yes        |               Yes               |
-| xz (`.xz`)         |       Yes        |               Yes               |
-| Zstandard (`.zst`) | Python 3.14 only |        Python 3.14 only         |
-| ZIP archive        |        No        |               No                |
+| Source             |       CLI        |           Python API            | Parallel |
+|--------------------|:----------------:|:-------------------------------:|:--------:|
+| Local path         |       Yes        | Yes, including path-like values |   Yes    |
+| HTTP/HTTPS URL     |       Yes        |               Yes               |    No    |
+| stdin (`-`)        |       Yes        |               N/A               |    No    |
+| File-like object   |        No        |               Yes               |    No    |
+| gzip (`.gz`)       |       Yes        |               Yes               | Yes [1]  |
+| bzip2 (`.bz2`)     |       Yes        |               Yes               | Yes [1]  |
+| xz (`.xz`)         |       Yes        |               Yes               | Yes [1]  |
+| Zstandard (`.zst`) | Python 3.14 only |        Python 3.14 only         | Yes [1]  |
+| ZIP archive        |        No        |               No                |    No    |
+
+[1] Parallel compression support requires both inputs to be local paths.
 
 Zstandard availability follows `py-jsonl` and its use of Python 3.14's
 standard-library zstd support; it is not supported by this project on earlier

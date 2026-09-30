@@ -46,10 +46,22 @@ For large local files, `--parallel` indexes OLD and NEW in separate processes:
 jsonl-diff old.jsonl new.jsonl --key id --parallel
 ```
 
-Parallel indexing is opt-in because process startup makes it slower for small
-inputs. It requires two local path sources and cannot currently be combined
-with `--max-temp`. HTTP/HTTPS, stdin, and file-like sources remain available
-through the default sequential mode.
+Each worker builds one private SQLite index. After validation, the parent
+attaches both indexes and queries them directly; records are not copied or
+parsed again. This keeps peak temporary usage close to the combined size of
+the two indexes.
+
+Parallel indexing is opt-in because process startup can make it slower for
+small inputs. It requires two local path sources, including supported
+compressed paths, and cannot currently be combined with `--max-temp`.
+HTTP/HTTPS, stdin, and file-like sources remain available through the default
+sequential mode. Results, ordering, duplicate handling, and schema comparison
+are identical in both modes.
+
+On the development benchmark, parallel indexing reduced a 45.7 MB-per-side
+comparison from 2.42 s to 1.55 s and a 2.15 GB-per-side comparison from
+125.56 s to 70.26 s. Results depend on storage, CPU, compression, record
+shape, and available cores.
 
 ## Quick start
 
@@ -127,7 +139,7 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--schema-ignore`     | RFC 6901 pointer to exclude from observed-schema profiling                     |
 | `--quiet`             | Suppress the normal summary                                                    |
 | `--max-temp BYTES`    | Best-effort budget for `jsonl-diff` workspace temporary storage                |
-| `--parallel`          | Index two local path sources concurrently in separate processes                |
+| `--parallel`          | Build and query separate OLD/NEW indexes concurrently for local paths           |
 | `--format FORMAT`     | Input format: `jsonl` (default) or a top-level JSON array with `json`          |
 
 Examples:
@@ -179,31 +191,37 @@ jsonl-diff old.json new.json --key id --format json
 ```python
 from jsonl_diff import ChangeOperation, diff
 
-with diff(
-    "old.jsonl.gz",
-    "new.jsonl.gz",
-    key=("country", "customerId"),
-    ignore=("/updated_at",),
-    where='country == `"ES"`',
-    schema_diff=True,
-    parallel=True,
-) as result:
-    print(result.summary)
 
-    for change in result.changes(ChangeOperation.MODIFIED):
-        print(change.key, change.old_line, change.new_line)
+def main():
+    with diff(
+        "old.jsonl.gz",
+        "new.jsonl.gz",
+        key=("country", "customerId"),
+        ignore=("/updated_at",),
+        where='country == `"ES"`',
+        schema_diff=True,
+        parallel=True,
+    ) as result:
+        print(result.summary)
 
-    for change in result.schema_changes():
-        print(change.operation, change.path)
+        for change in result.changes(ChangeOperation.MODIFIED):
+            print(change.key, change.old_line, change.new_line)
+
+        for change in result.schema_changes():
+            print(change.operation, change.path)
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 `diff()` returns a disk-backed `DiffResult`, used as a context manager.
 Results are streamed lazily through `changes()` rather than materialized in
 memory.
 
-On platforms that use multiprocessing `spawn`, including Windows, calls using
-`parallel=True` from an executable script must be protected by the usual
-`if __name__ == "__main__":` guard.
+The `if __name__ == "__main__":` guard is required by multiprocessing
+`spawn`, including on Windows. Using it also keeps the example portable across
+platforms and Python start-method changes.
 
 The main result models are:
 
@@ -258,6 +276,10 @@ order, and canonical number formatting.
 Supported sources include local paths and HTTP/HTTPS URLs. The Python API
 also accepts file-like objects.
 
+`--parallel` / `parallel=True` is limited to two local paths. Supported
+compression is detected independently for each worker; remote, stdin, and
+file-like inputs use sequential indexing.
+
 Supported compression:
 
 * gzip
@@ -300,7 +322,9 @@ uv run pytest
 uv run ruff check --quiet --output-format=concise .
 ```
 
-The test suite covers CLI behavior, identity/canonicalization, validation, details output, sources, compression, temporary limits, and cleanup.
+The test suite covers CLI behavior, identity/canonicalization, validation,
+details output, sequential and parallel indexing, sources, compression,
+temporary limits, and cleanup.
 
 ## License
 

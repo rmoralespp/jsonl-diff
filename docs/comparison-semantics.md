@@ -24,6 +24,10 @@ filters records, compares content, and orders output. See the main
 No normal summary or details output begins until both inputs pass complete
 input and duplicate validation.
 
+Parallel indexing preserves these rules. OLD and NEW are parsed in separate
+workers, but validation errors retain deterministic OLD-before-NEW precedence,
+and output ordering is identical to sequential indexing.
+
 ## Identity and duplicates
 
 Identity fields are top-level object-member names. Each component must exist

@@ -10,7 +10,9 @@ hierarchy. See the main [README](../README.md) for a quick-start example.
 ```python
 from jsonl_diff import ChangeOperation, diff
 
-with diff(
+
+def main():
+    with diff(
         "old.jsonl.gz",
         "new.jsonl.gz",
         key=("country", "customerId"),
@@ -21,14 +23,18 @@ with diff(
         schema_ignore=("/metadata",),
         format="jsonl",
         parallel=True,
-) as result:
-    print(result.summary)
+    ) as result:
+        print(result.summary)
 
-    for change in result.changes(ChangeOperation.MODIFIED):
-        print(change.key, change.old_line, change.new_line)
+        for change in result.changes(ChangeOperation.MODIFIED):
+            print(change.key, change.old_line, change.new_line)
 
-    for change in result.schema_changes():
-        print(change.operation, change.path)
+        for change in result.schema_changes():
+            print(change.operation, change.path)
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 The callable signature is:
@@ -40,19 +46,19 @@ from jsonl_diff import DiffResult, DuplicatePolicy, MissingKeyPolicy
 
 
 def diff(
-        old: Any,
-        new: Any,
-        *,
-        key: Union[str, Sequence[str]],
-        ignore: Sequence[str] = (),
-        where: Optional[str] = None,
-        duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
-        missing_key: Union[str, MissingKeyPolicy] = MissingKeyPolicy.ERROR,
-        max_temp: Optional[int] = None,
-        schema_diff: bool = False,
-        schema_ignore: Sequence[str] = (),
-        format: str = "jsonl",
-        parallel: bool = False,
+    old: Any,
+    new: Any,
+    *,
+    key: Union[str, Sequence[str]],
+    ignore: Sequence[str] = (),
+    where: Optional[str] = None,
+    duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
+    missing_key: Union[str, MissingKeyPolicy] = MissingKeyPolicy.ERROR,
+    max_temp: Optional[int] = None,
+    schema_diff: bool = False,
+    schema_ignore: Sequence[str] = (),
+    format: str = "jsonl",
+    parallel: bool = False,
 ) -> DiffResult:
     ...
 ```
@@ -68,16 +74,25 @@ are parsed incrementally with `ijson`. Both formats support the same local,
 remote, compressed, and file-like sources.
 
 `parallel=True` indexes OLD and NEW concurrently in separate spawned
-processes. It requires two local path sources and cannot be combined with
-`max_temp`. It is intended for large inputs because process startup can
-outweigh the benefit for small files. Calls from executable scripts on
-spawn-based platforms, including Windows, require an
-`if __name__ == "__main__":` guard.
+processes. Each process creates one private SQLite index; after both inputs
+pass validation, the parent attaches the indexes and queries them directly.
+No records are copied between indexes.
+
+Parallel mode requires two local path sources, including supported compressed
+paths, and cannot be combined with `max_temp`. Remote, stdin, and file-like
+sources remain supported by sequential mode. Process startup can outweigh the
+benefit for small files.
+
+Calls from executable scripts require an `if __name__ == "__main__":` guard
+on spawn-based platforms, including Windows. The guarded form shown above is
+portable across multiprocessing start methods.
 
 Using `DiffResult` as a context manager is required. It owns the temporary
 resources and removes its private workspace on exit. A result cannot be entered
 more than once. Its summary becomes available after entering and remains
 available after closing; iterating changes requires the context to remain open.
+In parallel mode, both attached SQLite indexes remain open until the result is
+closed.
 
 ## Result models
 
@@ -176,10 +191,12 @@ arbitrary-precision numbers.
 
 The public error hierarchy starts with `JsonlDiffError`:
 
-- `ConfigurationError`: invalid keys, ignore pointers, schema options, or `max_temp`;
+- `ConfigurationError`: invalid keys, ignore pointers, schema options,
+  `max_temp`, or parallel/source combinations;
 - `InputError`: an invalid source or record; exposes `source` and optional `line`;
 - `DuplicateKeyError`: an `InputError` with `key` and the first/repeated physical lines in `lines`;
-- `ResourceError`: the temporary index cannot be created, written, or kept within its configured limit.
+- `ResourceError`: workers or temporary indexes cannot be started, created,
+  attached, written, or kept within the configured limit.
 
 Failures during `diff()` clean up the workspace before the exception is
 raised.

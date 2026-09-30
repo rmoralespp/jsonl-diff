@@ -5,6 +5,10 @@
 `--details FILE` (CLI) streams a deterministic, machine-readable JSONL report
 after both inputs have been completely indexed and validated.
 
+`--parallel` changes how local inputs are indexed but does not change this
+format or event ordering. The execution mode is intentionally not written to
+the report because it has no comparison-semantic effect.
+
 ```bash
 jsonl-diff old.jsonl new.jsonl --key id --details changes.jsonl
 ```
