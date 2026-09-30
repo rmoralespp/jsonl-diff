@@ -681,18 +681,6 @@ def _parallel_setting() -> Optional[bool]:
     return setting not in ("0", "")
 
 
-def _can_fork() -> bool:
-    import multiprocessing
-    import threading
-
-    # Forking a multi-threaded process can deadlock the child, and CPython 3.14
-    # already moved the platform default away from `fork` for that reason.
-    return (
-        "fork" in multiprocessing.get_all_start_methods()
-        and threading.active_count() == 1
-    )
-
-
 def _cli_entry_point() -> bool:
     """Return whether `__main__` is the jsonl-diff command line entry point.
 
@@ -718,12 +706,14 @@ def _cli_entry_point() -> bool:
 def _multiprocessing_context() -> Any:
     import multiprocessing
 
-    # `fork` skips a second interpreter startup and re-import of ijson,
-    # jmespath and msgspec. That is worth ~30 % on a few thousand records and
-    # fades to noise from ~67k records up, where the indexing work dominates.
-    if _can_fork():
-        return multiprocessing.get_context("fork")
-    return multiprocessing.get_context("spawn")
+    # Defer to the interpreter's default start method instead of forcing one.
+    # That is `spawn` on Windows and macOS, and CPython 3.14 is migrating POSIX
+    # off `fork`; following the default keeps behaviour aligned with the
+    # platform and clear of the fork-in-a-thread deprecation. Every default
+    # start method pickles the config and, except for `fork`, re-imports the
+    # interpreter per worker -- startup cost that is noise next to indexing on
+    # any real input.
+    return multiprocessing.get_context()
 
 
 def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") -> None:
@@ -1322,10 +1312,10 @@ class DiffResult:
         setting = _parallel_setting()
         if setting is False:
             return False
-        # Without `fork` the workers re-import `__main__`, which is only known
-        # to be safe for our own CLI. A library caller on such a platform
-        # (every Windows run) opts in with `JSONL_DIFF_PARALLEL=1`.
-        if setting is None and not _can_fork() and not _cli_entry_point():
+        # The default start method may re-import `__main__` in each worker
+        # (every method except `fork`), which is only known to be safe for our
+        # own CLI. A library caller opts in with `JSONL_DIFF_PARALLEL=1`.
+        if setting is None and not _cli_entry_point():
             return False
         # Each worker owns a private database, so the parent cannot enforce a
         # single combined budget while they run. Keep the sequential path,
@@ -1350,8 +1340,8 @@ class DiffResult:
             for side in (0, 1)
         ]
         # `fork` inherits the compiled `--where` expression and every other
-        # start method pickles it; either way the worker gets the config as
-        # it stands here.
+        # start method pickles it; either way the worker gets the config as it
+        # stands here.
         workers = []
         for side, source in enumerate((self._old, self._new)):
             process = context.Process(
