@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* **Changed:** Parse top-level JSON arrays through `ijson`'s native `items()` pipeline, avoiding
+  Python event bridging while preserving incremental reads and exact numeric semantics.
+
 ## v0.1.5
 
 * **Added:** Allow objects and arrays as identity 

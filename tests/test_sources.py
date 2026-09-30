@@ -28,6 +28,11 @@ def _write_xz(path, content):
         stream.write(content)
 
 
+class _ChunkedBytesIO(io.BytesIO):
+    def read(self, size=-1):
+        return super().read(size if size == 0 else 1)
+
+
 class TestCompressedSources:
     @pytest.mark.parametrize(
         "suffix,writer",
@@ -96,6 +101,18 @@ class TestStreamSources:
         assert not old.closed
         assert not new.closed
 
+    def test_json_array_validation_handles_chunked_leading_whitespace(self):
+        # Arrange
+        old = _ChunkedBytesIO(b' \n\t[{"id":1,"value":"same"}]')
+        new = _ChunkedBytesIO(b'\r\n[{"value":"same","id":1}]')
+
+        # Act
+        with diff(old, new, key="id", format="json") as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+
 
 class TestJsonArraySources:
     def test_json_arrays_are_streamed_incrementally(self, tmp_path):
@@ -134,11 +151,15 @@ class TestJsonArraySources:
         # Assert
         assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
 
-    def test_json_format_rejects_non_array_documents(self, tmp_path):
+    @pytest.mark.parametrize(
+        "content",
+        ['{"item":{"id":1}}', '"item"', "1", "true", "null"],
+    )
+    def test_json_format_rejects_non_array_documents(self, tmp_path, content):
         # Arrange
         old = tmp_path / "old.json"
         new = tmp_path / "new.json"
-        old.write_text('{"id":1}', encoding="utf-8")
+        old.write_text(content, encoding="utf-8")
         new.write_text("[]", encoding="utf-8")
 
         # Act / Assert
