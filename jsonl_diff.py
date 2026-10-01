@@ -1,6 +1,7 @@
 """Strict, disk-backed reconciliation of JSON Lines datasets."""
 
 import argparse
+import contextlib
 import hashlib
 import json
 import math
@@ -678,6 +679,71 @@ else:
         )
 
 
+def _parallel_setting() -> Optional[bool]:
+    """Return the explicit `JSONL_DIFF_PARALLEL` choice, or None for automatic."""
+    setting = os.environ.get("JSONL_DIFF_PARALLEL")
+    if setting is None:
+        return None
+    return setting not in ("0", "")
+
+
+def _cli_entry_point() -> bool:
+    """Return whether `__main__` is the jsonl-diff command line entry point.
+
+    Every start method except `fork` re-imports `__main__` in each worker, so
+    an embedding application's module-level code would run once per side, and
+    an unguarded one cannot start workers at all. Automatic parallel indexing
+    is therefore limited to our own CLI, whose module guard makes re-import
+    safe; library callers ask for it with `JSONL_DIFF_PARALLEL=1`.
+    """
+    module = sys.modules.get("__main__")
+    if module is None:
+        return False
+    # `python -m jsonl_diff` runs this module itself as `__main__`; the
+    # console script does `from jsonl_diff import main`. Both leave `main`
+    # bound to this module's own function, which beats matching file names
+    # (the Windows entry point is an `.exe`, or a `-script.py` shim).
+    if getattr(module, "main", None) is main:
+        return True
+    spec = getattr(module, "__spec__", None)
+    return spec is not None and spec.name in ("jsonl_diff", "jsonl_diff.__main__")
+
+
+def _multiprocessing_context() -> Any:
+    import multiprocessing
+
+    # Defer to the interpreter's default start method instead of forcing one.
+    # That is `spawn` on Windows and macOS, and CPython 3.14 is migrating POSIX
+    # off `fork`; following the default keeps behaviour aligned with the
+    # platform and clear of the fork-in-a-thread deprecation. Every default
+    # start method pickles the config and, except for `fork`, re-imports the
+    # interpreter per worker -- startup cost that is noise next to indexing on
+    # any real input.
+    return multiprocessing.get_context()
+
+
+def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") -> None:
+    """Index one side into a private database, or exit non-zero on failure.
+
+    Nothing is reported back: the parent detects failure from the exit status
+    and re-raises by re-indexing sequentially, which reproduces the original
+    exception exactly rather than shipping a copy of it across processes.
+    """
+    result = None
+    try:
+        result = DiffResult(source, source, config)
+        result._open_connection(db_path)
+        result._index(source, side)
+        result._connection.commit()
+    except BaseException:  # noqa: BLE001 - the parent reproduces this
+        if result is not None:
+            result.close()
+        # Exit without unwinding so the traceback never reaches stderr; the
+        # parent raises the real error itself.
+        os._exit(1)
+    result.close()
+
+
 class DiffResult:
     """A context-managed, disk-backed comparison result."""
 
@@ -695,13 +761,19 @@ class DiffResult:
 
     def _open(self):
         try:
-            self._workspace = tempfile.TemporaryDirectory(prefix="jsonl-diff-")
-            self._connection = sqlite3.connect(os.path.join(self._workspace.name, "index.sqlite3"))
-            self._configure_database()
-            self._create_schema()
+            self._open_workspace()
+            self._open_connection(os.path.join(self._workspace.name, "index.sqlite3"))
         except (OSError, sqlite3.Error) as error:
             self.close()
             raise ResourceError("could not create the temporary index") from error
+
+    def _open_workspace(self) -> None:
+        self._workspace = tempfile.TemporaryDirectory(prefix="jsonl-diff-")
+
+    def _open_connection(self, path: str) -> None:
+        self._connection = sqlite3.connect(path)
+        self._configure_database()
+        self._create_schema()
 
     def _configure_database(self):
         self._connection.execute("PRAGMA journal_mode = OFF")
@@ -1028,9 +1100,12 @@ class DiffResult:
             raise RuntimeError("the diff result cannot be entered more than once")
         self._started = True
         try:
-            self._open()
-            self._index(self._old, 0)
-            self._index(self._new, 1)
+            if self._parallel_eligible():
+                self._index_parallel()
+            else:
+                self._open()
+                self._index(self._old, 0)
+                self._index(self._new, 1)
             self._summary_value = self._calculate_summary()
             return self
         except BaseException:
@@ -1232,6 +1307,108 @@ class DiffResult:
             raise InputError(message, name, line) from error
         except sqlite3.DatabaseError as error:
             raise ResourceError("could not build the temporary index") from error
+
+    def _parallel_eligible(self) -> bool:
+        """Return whether both sides can be indexed in separate processes."""
+        setting = _parallel_setting()
+        if setting is False:
+            return False
+        # The default start method may re-import `__main__` in each worker
+        # (every method except `fork`), which is only known to be safe for our
+        # own CLI. A library caller opts in with `JSONL_DIFF_PARALLEL=1`.
+        if setting is None and not _cli_entry_point():
+            return False
+        # Each worker owns a private database, so the parent cannot enforce a
+        # single combined budget while they run. Keep the sequential path,
+        # whose incremental `_check_size` is what `--max-temp` promises.
+        if self.config.max_temp is not None:
+            return False
+        # Only re-openable, picklable sources survive a process boundary; file
+        # objects and stdin must stay in this process.
+        return all(
+            isinstance(source, (str, os.PathLike)) and os.fspath(source) != "-"
+            for source in (self._old, self._new)
+        )
+
+    def _index_parallel(self) -> None:
+        context = _multiprocessing_context()
+        try:
+            self._open_workspace()
+        except OSError as error:
+            raise ResourceError("could not create the temporary index") from error
+        paths = [
+            os.path.join(self._workspace.name, "side{}.sqlite3".format(side))
+            for side in (0, 1)
+        ]
+        # `fork` inherits the compiled `--where` expression and every other
+        # start method pickles it; either way the worker gets the config as it
+        # stands here.
+        workers = []
+        for side, source in enumerate((self._old, self._new)):
+            process = context.Process(
+                target=_index_worker,
+                args=(paths[side], os.fspath(source), side, self.config),
+                daemon=True,
+            )
+            process.start()
+            workers.append(process)
+
+        failed = False
+        for process in workers:
+            process.join()
+            failed = failed or process.exitcode != 0
+
+        try:
+            self._open_connection(os.path.join(self._workspace.name, "index.sqlite3"))
+            if not failed:
+                self._merge_worker_databases(paths)
+        except (OSError, sqlite3.Error) as error:
+            raise ResourceError("could not build the temporary index") from error
+        finally:
+            for path in paths:
+                # Halve the peak workspace: the merged index is about the same
+                # size as the two worker databases together, and the rest of
+                # the run would otherwise hold both. Purely a disk-space
+                # measure -- the workers have exited and the databases are
+                # already detached, so nothing still holds these files open,
+                # and `close()` would remove them regardless.
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+
+        if failed:
+            # A worker exited non-zero, so its database holds only the records
+            # read before it stopped; merging that would yield a well-formed
+            # but silently truncated diff. Index sequentially instead: the same
+            # input raises the same error here, with the exact message, line
+            # and OLD-before-NEW ordering the sequential path always produced.
+            # A failure that does not reproduce was transient, and this pass
+            # simply succeeds.
+            self._index(self._old, 0)
+            self._index(self._new, 1)
+
+    def _merge_worker_databases(self, paths: Sequence[str]) -> None:
+        tables = ["records", "duplicate_records"]
+        if self.config.schema_diff:
+            tables += ["schema_fields", "schema_objects"]
+        for index, path in enumerate(paths):
+            alias = "worker{}".format(index)
+            # ATTACH and DETACH cannot run inside an open transaction, so each
+            # worker database is merged in its own committed transaction.
+            self._connection.execute(
+                "ATTACH DATABASE ? AS {}".format(alias),
+                (path,),
+            )
+            try:
+                with self._connection:
+                    for table in tables:
+                        # Rows arrive already keyed by side and sorted by the
+                        # worker's own primary key, so this is a C-level
+                        # append into the merged B-tree.
+                        self._connection.execute(
+                            "INSERT INTO {0} SELECT * FROM {1}.{0}".format(table, alias),
+                        )
+            finally:
+                self._connection.execute("DETACH DATABASE {}".format(alias))
 
     def _check_size(self):
         if self.config.max_temp is None:
