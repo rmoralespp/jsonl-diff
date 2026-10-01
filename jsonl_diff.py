@@ -4,7 +4,6 @@ import argparse
 import contextlib
 import hashlib
 import json
-import math
 import os
 import sqlite3
 import sys
@@ -13,10 +12,8 @@ import warnings
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
-from json.encoder import encode_basestring as _encode_basestring
-from json.encoder import encode_basestring_ascii as _encode_basestring_ascii
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
+from typing import Any, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
 import ijson
 import jmespath
@@ -26,13 +23,10 @@ import msgspec
 utf8 = "utf-8"
 
 JsonIdentityValue = Union[str, Decimal, bool, int, None, list, dict]
-Number = Union[Decimal, int, float]
 IdentityKey = Tuple[JsonIdentityValue, ...]
 
 
 _MISSING = object()
-
-_DIGITS = ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
 
 # Avoid per-record filesystem scans: SQLite already enforces the main size limit.
 # Check periodically and once after each side finishes to catch extra temp/journal growth.
@@ -47,6 +41,9 @@ _SCHEMA_TYPE_INDEXES = {
     "object": 7,
     "array": 8,
 }
+
+_CANONICAL_ENCODER = msgspec.json.Encoder(decimal_format="number", order="sorted")
+_INPUT_DECODER = msgspec.json.Decoder(float_hook=Decimal)
 
 
 class JsonlDiffError(Exception):
@@ -77,7 +74,7 @@ class DuplicateKeyError(InputError):
         self.lines = tuple(lines)
 
         message = "duplicate key {} on lines {}".format(
-            _canonical_text(list(key), ensure_ascii=True),
+            _canonical_text(list(key)),
             ", ".join(str(line) for line in lines),
         )
         super().__init__(message, source)
@@ -316,116 +313,12 @@ def _decode_json(value: str) -> Any:
     )
 
 
-def _number(value: Number) -> str:
-    if isinstance(value, float):
-        if not math.isfinite(value):
-            raise ValueError("non-finite numbers are not valid JSON")
-        value = Decimal(str(value))
-    elif isinstance(value, int):
-        value = Decimal(value)
-    if not isinstance(value, Decimal) or not value.is_finite():
-        raise ValueError("non-finite numbers are not valid JSON")
-    if value.is_zero():
-        return "0"
-
-    sign, digits, exponent = value.as_tuple()
-    count = len(digits)
-    trailing_zeros = 0
-    while count - trailing_zeros > 1 and digits[count - trailing_zeros - 1] == 0:
-        trailing_zeros += 1
-    if trailing_zeros:
-        digits = digits[:count - trailing_zeros]
-        exponent += trailing_zeros
-        count -= trailing_zeros
-
-    if count == 1:
-        mantissa = _DIGITS[digits[0]]
-    else:
-        text = "".join([_DIGITS[digit] for digit in digits])
-        mantissa = text[0] + "." + text[1:]
-
-    scientific_exponent = exponent + count - 1
-    return "{}{}e{:+d}".format("-" if sign else "", mantissa, scientific_exponent)
-
-
-def _details_number(value: Number) -> str:
-    if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError("non-finite numbers are not valid JSON")
-    if isinstance(value, Decimal) and not value.is_finite():
-        raise ValueError("non-finite numbers are not valid JSON")
-    return str(value).lower()
-
-
-def _require_str_key(name: Any) -> bool:
-    if isinstance(name, str):
-        return True
-    raise ValueError("JSON object property names must be strings")
-
-
-def _json_text(
-    value: Any,
-    escape: Callable[[str], str],
-    number: Callable[[Number], str],
-) -> str:
-    # Checks are ordered by frequency for object-heavy payloads. String escaping
-    # is delegated to CPython's C-accelerated encoder (`escape`) rather than a per-value `json.dumps`.
-    kind = type(value)
-    if kind is str:
-        return escape(value)
-    elif kind is dict:
-        members = [
-            escape(name) + ":" + _json_text(value[name], escape, number)
-            for name in sorted(value)
-            if type(name) is str or _require_str_key(name)
-        ]
-        return "{" + ",".join(members) + "}"
-    elif kind is list or kind is tuple:
-        return "[" + ",".join([_json_text(item, escape, number) for item in value]) + "]"
-    elif value is None:
-        return "null"
-    elif value is True:
-        return "true"
-    elif value is False:
-        return "false"
-    elif isinstance(value, (Decimal, int, float)):
-        return number(value)
-    elif isinstance(value, str):
-        return escape(value)
-    elif isinstance(value, (list, tuple)):
-        return "[" + ",".join([_json_text(item, escape, number) for item in value]) + "]"
-    elif isinstance(value, dict):
-        members = [
-            escape(name) + ":" + _json_text(value[name], escape, number)
-            for name in sorted(value)
-            if type(name) is str or _require_str_key(name)
-        ]
-        return "{" + ",".join(members) + "}"
-    else:
-        raise ValueError("unsupported JSON value type: {}".format(type(value).__name__))
-
-
-def _canonical_text(value: Any, ensure_ascii: bool = False) -> str:
-    escape = _encode_basestring_ascii if ensure_ascii else _encode_basestring
-    return _json_text(value, escape, _number)
-
-
-def _details_text(value: Any, ensure_ascii: bool = False) -> str:
-    escape = _encode_basestring_ascii if ensure_ascii else _encode_basestring
-    return _json_text(value, escape, _details_number)
-
-
 def _canonical(value: Any) -> bytes:
-    return _canonical_text(value).encode(utf8)
+    return _CANONICAL_ENCODER.encode(value)
 
 
-_CONTENT_ENCODER = msgspec.json.Encoder(
-    decimal_format="number",
-    order="sorted",
-)
-
-
-def _content_canonical(value: Any) -> bytes:
-    return _CONTENT_ENCODER.encode(value)
+def _canonical_text(value: Any) -> str:
+    return _canonical(value).decode(utf8)
 
 
 def _fingerprint(canonical: bytes) -> Tuple[int, bytes]:
@@ -609,17 +502,12 @@ def _array_records(source: Any) -> Iterator[Any]:
         yield from ijson.items(_TopLevelArrayReader(stream), "item", use_float=False)
 
 
-_INPUT_DECODER = msgspec.json.Decoder(float_hook=Decimal)
-
-
 def _records(source: Any, on_error: Any, input_format: str) -> Iterator[Any]:
     if input_format == "json":
         yield from _array_records(source)
         return
-    # msgspec decodes input lines ~2.6x faster than the stdlib parser and
-    # rejects NaN/Infinity natively. Non-integer numbers become Decimal while
-    # integers stay native `int`, preserving their parsed representation for
-    # content comparison. Duplicate object keys use last-wins semantics.
+    # Non-integer numbers become Decimal while integers stay native `int`,
+    # preserving their parsed representation. Duplicate keys use last-wins.
     yield from jsonl.load(source, cls=_INPUT_DECODER.decode, _on_error=on_error)
 
 
@@ -1046,12 +934,7 @@ class DiffResult:
             raise RuntimeError("the diff result cannot be entered more than once")
         self._started = True
         try:
-            if self._parallel_eligible():
-                self._index_parallel()
-            else:
-                self._open()
-                self._index(self._old, 0)
-                self._index(self._new, 1)
+            self._index_sources()
             self._summary_value = self._calculate_summary()
             return self
         except BaseException:
@@ -1060,6 +943,14 @@ class DiffResult:
 
     def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any):
         self.close()
+
+    def _index_sources(self) -> None:
+        if self._parallel_eligible():
+            self._index_parallel()
+            return
+        self._open()
+        self._index(self._old, 0)
+        self._index(self._new, 1)
 
     def _insert_tolerated_record(
         self,
@@ -1123,7 +1014,7 @@ class DiffResult:
             try:
                 key = _identity(record, self.config.key, self.config.missing_key)
                 normalized = _remove_ignored(record, self._ignore_tree)
-                canonical = _content_canonical(normalized)
+                canonical = _canonical(normalized)
                 identity = _canonical(list(key))
                 length, digest = _fingerprint(canonical)
             except (TypeError, ValueError) as error:
@@ -1626,7 +1517,7 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]):
             summary["schema"] = _schema_summary_dict(result.schema_summary)
         yield summary
 
-    jsonl.dump(events(), path, cls=_details_text)
+    jsonl.dump(events(), path, cls=_canonical_text)
 
 
 class _ArgumentParser(argparse.ArgumentParser):

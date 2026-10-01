@@ -25,6 +25,10 @@ It is useful for snapshots, ETL validation, migrations, exports, and CI checks.
 pip install jsonl-diff
 ```
 
+Python 3.10 or newer is required. `msgspec` is installed as a mandatory
+dependency and provides JSONL decoding plus deterministic encoding for
+identities, content fingerprints, and details output.
+
 ## Quick start
 
 Given:
@@ -68,7 +72,7 @@ Record order does not matter.
 * Configurable duplicate handling with counts and diagnostics: `error`, `first`, or `last`.
 * Exact **[RFC 6901](https://www.rfc-editor.org/info/rfc6901/)** JSON Pointer ignores.
 * Optional disk-backed observed-schema diff for fields, types, nullability, and requiredness.
-* Value-canonical numeric identities with representation-sensitive record content.
+* Representation-sensitive numeric identities and record content.
 * Deterministic summaries and change iteration.
 * Original OLD/NEW physical line numbers.
 * Machine-readable JSONL change log with `--details` ([format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md)).
@@ -208,8 +212,8 @@ signature, result models, `Decimal` key semantics, and error hierarchy.
 * Duplicate identities fail by default; `--duplicates first`/`last` select one
   occurrence, report every discarded occurrence, and return exit code `1`.
 * Object property order is ignored; array order is significant.
-* Numeric identity keys match by mathematical value, but record content
-  preserves parsed numeric representation: `1.0` and `1.00` are different.
+* Numeric identity keys and record content preserve parsed numeric
+  representation: `1` and `1.0`, or `1.0` and `1.00`, are different.
 * Unicode strings are compared without normalization.
 * Changes are reported in deterministic identity order.
 

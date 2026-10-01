@@ -38,8 +38,8 @@ class TestDiffSummary:
         # Arrange
         old = tmp_path / "old.json"
         new = tmp_path / "new.json"
-        old.write_text('[{"id":1,"value":1}]', encoding="utf-8")
-        new.write_text('[{"id":1.0,"value":1e0}]', encoding="utf-8")
+        old.write_text('[{"id":1,"value":1.0}]', encoding="utf-8")
+        new.write_text('[{"id":1,"value":1e0}]', encoding="utf-8")
 
         # Act
         with diff(old, new, key="id", format="json") as result:
@@ -201,15 +201,14 @@ class TestIdentityKeys:
 
         assert summary == Summary(equal=0, added=1, deleted=1, modified=0)
 
-    def test_identity_nested_numbers_match_before_content_comparison(self, write_jsonl):
+    def test_nested_numeric_identity_representation_is_significant(self, write_jsonl):
         old = write_jsonl("old.jsonl", ['{"id":{"version":1,"values":[2.0]}}'])
         new = write_jsonl("new.jsonl", ['{"id":{"version":1.0,"values":[2e0]}}'])
 
         with diff(old, new, key="id") as result:
-            change = next(result.changes())
+            summary = result.summary
 
-        assert change.operation == ChangeOperation.MODIFIED
-        assert change.key == ({"version": Decimal("1"), "values": [Decimal("2")]},)
+        assert summary == Summary(equal=0, added=1, deleted=1, modified=0)
 
     def test_composite_key_is_returned_as_typed_tuple(self, write_jsonl):
         # Arrange
@@ -264,7 +263,7 @@ class TestIdentityKeys:
             ("-0", "0.0"),
         ],
     )
-    def test_numerically_equal_identity_with_different_content_notation_is_modified(
+    def test_different_numeric_identity_representations_are_added_and_deleted(
         self,
         write_jsonl,
         old_number,
@@ -279,7 +278,19 @@ class TestIdentityKeys:
             summary = result.summary
 
         # Assert
-        assert summary == Summary(equal=0, added=0, deleted=0, modified=1)
+        assert summary == Summary(equal=0, added=1, deleted=1, modified=0)
+
+    def test_numeric_identity_spellings_with_same_parsed_representation_match(
+        self,
+        write_jsonl,
+    ):
+        old = write_jsonl("old.jsonl", ['{"id":1}'])
+        new = write_jsonl("new.jsonl", ['{"id":1e0}'])
+
+        with diff(old, new, key="id") as result:
+            summary = result.summary
+
+        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
 
     def test_extreme_exponents_remain_compact(self, write_jsonl):
         # Arrange
@@ -778,6 +789,14 @@ class TestInputValidation:
         # Assert
         assert captured.value.lines == (1, 3)
         assert captured.value.source == "OLD"
+
+    def test_duplicate_identity_uses_msgspec_numeric_notation(self, write_jsonl):
+        old = write_jsonl("old.jsonl", ['{"id":1e3}', '{"id":1e3}'])
+        new = write_jsonl("new.jsonl", [])
+
+        with pytest.raises(DuplicateKeyError, match=r"duplicate key \[1E\+3\]"):
+            with diff(old, new, key="id"):
+                pass
 
     def test_duplicate_identity_is_detected_across_insert_batches(self, write_jsonl):
         # A duplicate whose two occurrences are separated by more than one

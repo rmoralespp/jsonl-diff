@@ -50,9 +50,11 @@ is equivalent to `--key country,customer`.
 
 JSON types remain significant: `"1"` is different from `1`, and `true` is
 different from `1`. Object member order is ignored recursively, while array
-element order is significant. Numeric identity components are canonicalized by
-mathematical value, so differently represented but equal numbers identify the
-same record.
+element order is significant. Numeric identity components preserve their
+parsed representation, so `1` and `1.0`, `1.0` and `1.00`, or `1000` and
+`1e3` identify different records. Parsing may normalize equivalent lexical
+spellings; for example, `1` and `1e0` have the same parsed representation and
+identify the same record.
 
 Every normalized identity must be unique within OLD and within NEW by default.
 The first duplicate aborts the comparison; `DuplicateKeyError` reports the

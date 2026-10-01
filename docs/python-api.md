@@ -160,8 +160,9 @@ With numeric keys, API key components are `decimal.Decimal` values. For
 example, JSON identity `7` is returned as `Decimal("7")`; JSON strings,
 booleans, objects, and arrays retain their JSON types. Object member order is
 canonicalized recursively, while array element order remains significant.
-Details JSONL writes identity values as JSON values, including
-arbitrary-precision numbers.
+Decimal scale and exponent representation remain significant for identity:
+`Decimal("1")` and `Decimal("1.0")` identify different records. Details JSONL
+writes identity values as JSON values, including arbitrary-precision numbers.
 
 ## API errors
 
