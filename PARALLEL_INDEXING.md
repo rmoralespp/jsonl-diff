@@ -20,10 +20,10 @@ equal):
 
 | file | records | main | this branch | change |
 | --- | ---: | ---: | ---: | ---: |
-| regulations.json.gz | 6 056 | 1.021 s | 0.738 s | -27.7 % |
-| nomenclatures.json.gz | 67 331 | 5.991 s | 3.412 s | -43.0 % |
-| quota_balance_events.json.gz | 893 874 | 43.278 s | 24.950 s | -42.3 % |
-| measures.json.gz | 1 687 928 | 265.142 s | 147.731 s | -44.3 % |
+| a.json.gz | 6 056 | 1.021 s | 0.738 s | -27.7 % |
+| b.json.gz | 67 331 | 5.991 s | 3.412 s | -43.0 % |
+| c.json.gz | 893 874 | 43.278 s | 24.950 s | -42.3 % |
+| d.json.gz | 1 687 928 | 265.142 s | 147.731 s | -44.3 % |
 
 Full method, raw results and the rejected alternatives are in
 `data/TIMINGS.md` (untracked).
@@ -96,8 +96,8 @@ One diff per process, best of 3:
 
 | dataset | sequential | fork | forkserver | spawn |
 | --- | ---: | ---: | ---: | ---: |
-| regulations.json.gz | 0.834 | **0.479** | 0.682 | 0.695 |
-| nomenclatures.json.gz | 5.777 | 3.412 | 3.392 | **3.320** |
+| a.json.gz | 0.834 | **0.479** | 0.682 | 0.695 |
+| b.json.gz | 5.777 | 3.412 | 3.392 | **3.320** |
 
 `fork` only wins on small inputs; from ~67 k records up the three are equal, so
 `forkserver` was dropped as a needless third path. CPython 3.14 moved the Linux
@@ -113,8 +113,8 @@ the databases are detached, so nothing still holds them open.
 
 | dataset | worker DBs | merged DB | peak workspace |
 | --- | ---: | ---: | ---: |
-| nomenclatures.json.gz | 16.0 MB | 15.1 MB | 31.1 MB |
-| quota_balance_events.json.gz | 229.1 MB | 212.4 MB | 441.5 MB |
+| a.json.gz | 16.0 MB | 15.1 MB | 31.1 MB |
+| b.json.gz | 229.1 MB | 212.4 MB | 441.5 MB |
 
 Peak is about 2.08x the merged index. Without the removal the run would hold
 both copies for the whole comparison phase. The `contextlib.suppress(OSError)`
@@ -134,7 +134,7 @@ still removes the files and the result is unaffected.
 ## Windows
 
 Windows only offers `spawn`, and the speedup survives it (5.777 s → 3.320 s on
-`nomenclatures`). The hazard is that every start method except `fork`
+`a`). The hazard is that every start method except `fork`
 re-imports `__main__` in each worker:
 
 - An embedding application's module-level code runs **once per worker**.
@@ -223,7 +223,7 @@ What genuinely needs a Windows machine:
 ## Verification already done (Linux, Python 3.14.7)
 
 - 150/150 tests pass.
-- On a mutated `regulations` pair (1 added, 63 deleted, 113 modified) parallel
+- On a mutated `b` pair (1 added, 63 deleted, 113 modified) parallel
   and sequential produce byte-identical stdout, `--details` and
   `--schema-diff --details` output.
 - Duplicate key on OLD, duplicate key on NEW, truncated JSON, both sides
