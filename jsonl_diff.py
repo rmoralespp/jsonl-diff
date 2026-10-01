@@ -15,6 +15,7 @@ from decimal import Decimal
 from enum import Enum
 from json.encoder import encode_basestring as _encode_basestring
 from json.encoder import encode_basestring_ascii as _encode_basestring_ascii
+from operator import itemgetter
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
@@ -799,6 +800,8 @@ class DiffResult:
         self.config = config
         self._ignore_tree = _ignore_tree(config.ignore, config.key)
         self._schema_ignore_tree = _ignore_tree(config.schema_ignore, ())
+        self._identity_getter = itemgetter(*config.key)
+        self._identity_is_composite = len(config.key) > 1
         self._where = config.where_expression  # Compiled during configuration validation and reused for every record.
         self._workspace = None
         self._connection = None
@@ -1191,6 +1194,20 @@ class DiffResult:
             (line, length, digest, side, identity),
         )
 
+    def _extract_identity(self, record: Dict[str, Any]) -> IdentityKey:
+        """Extract a typed identity with a C-level lookup and exact fallbacks."""
+        try:
+            value = self._identity_getter(record)
+        except KeyError:
+            return _identity(record, self.config.key, self.config.missing_key)
+        # Parsed records contain only supported JSON types. Composite keys allow
+        # null components, so a successful lookup is already fully validated.
+        if self._identity_is_composite:
+            return value
+        if value is None:
+            return _identity(record, self.config.key, self.config.missing_key)
+        return (value,)
+
     def _insert_records(self, records: Iterable[Any], side: int, source: str):
         cursor = self._connection.cursor()
         schema_fields = {}
@@ -1221,7 +1238,7 @@ class DiffResult:
                             self._check_size()
                     continue
             try:
-                key = _identity(record, self.config.key, self.config.missing_key)
+                key = self._extract_identity(record)
                 normalized = _remove_ignored(record, self._ignore_tree)
                 canonical = _content_canonical(normalized)
                 identity = _canonical(list(key))

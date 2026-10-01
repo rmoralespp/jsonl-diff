@@ -8,6 +8,8 @@
   while preserving incremental reads and exact numeric semantics.
 * **Changed:** Add parallel indexing for large local inputs
 * **Changed:** Speed up array number normalization
+* **Changed:** Speed up identity extraction with precompiled C-level field
+  lookups while preserving missing-field and null-key behavior.
 
 ## v0.1.5
 
