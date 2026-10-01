@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* **Changed:** Speed up incremental JSON array parsing: pass top-level JSON array streams directly to ijson.items(), 
+  keeping token parsing and item construction in the native yajl2_c pipeline
+* **Changed:** Parse top-level JSON arrays through `ijson`'s native `items()` pipeline, avoiding Python event bridging 
+  while preserving incremental reads and exact numeric semantics.
+
 ## v0.1.5
 
 * **Added:** Allow objects and arrays as identity 

@@ -658,18 +658,40 @@ def _normalize_array_numbers(value: Any) -> Any:
         return value
 
 
+class _TopLevelArrayReader:
+    """Validate the root value without interrupting ijson's native items pipeline."""
+
+    __slots__ = ("_stream", "_validated")
+
+    def __init__(self, stream: Any):
+        self._stream = stream
+        self._validated = False
+
+    def read(self, size: int = -1) -> Any:
+        data = self._stream.read(size)
+        if not self._validated and data:
+            # ijson probes streams with read(0), and leading JSON whitespace may
+            # span chunks, so wait until the first non-whitespace token arrives.
+            whitespace = " \t\r\n" if isinstance(data, str) else b" \t\r\n"
+            valid_non_array = '{"-0123456789tfn' if isinstance(data, str) else b'{"-0123456789tfn'
+            token = data.lstrip(whitespace)
+            if token:
+                # Reject valid non-array roots with the existing error; unknown
+                # starters pass through so ijson preserves its detailed syntax errors.
+                if token[0] in valid_non_array:
+                    raise ValueError("expected a top-level JSON array")
+                self._validated = True
+        # Validation only inspects data; the native parser receives the original chunk.
+        return data
+
+
 def _array_records(source: Any) -> Iterator[Any]:
     with jsonl.open_stream(source) as stream:
-        events = ijson.parse(stream, use_float=False)
-        try:
-            prefix, event, _value = next(events)
-        except StopIteration:
-            raise ValueError("empty JSON input") from None
-        else:
-            if (prefix, event) != ("", "start_array"):
-                raise ValueError("expected a top-level JSON array")
-            for record in ijson.items(events, "item"):
-                yield _normalize_array_numbers(record)
+        # Passing the stream directly keeps parsing and item construction in yajl2_c;
+        # feeding parse() events into items() would rebuild every record in Python.
+        records = ijson.items(_TopLevelArrayReader(stream), "item", use_float=False)
+        for record in records:
+            yield _normalize_array_numbers(record)
 
 
 if _msgspec is not None:
