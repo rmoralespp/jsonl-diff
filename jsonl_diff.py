@@ -26,6 +26,8 @@ try:  # Optional C-accelerated content canonicalization (Python 3.10+).
 except ImportError:
     _msgspec = None
 
+utf8 = "utf-8"
+
 JsonIdentityValue = Union[str, Decimal, bool, int, None, list, dict]
 Number = Union[Decimal, int, float]
 IdentityKey = Tuple[JsonIdentityValue, ...]
@@ -216,13 +218,13 @@ class SchemaSummary:
     @property
     def different(self) -> bool:
         """Return whether any observed schema changes were found."""
-        return bool(
-            self.fields_added
-            or self.fields_removed
-            or self.types_changed
-            or self.nullability_changed
-            or self.requiredness_changed,
-        )
+        return any((
+            self.fields_added,
+            self.fields_removed,
+            self.types_changed,
+            self.nullability_changed,
+            self.requiredness_changed,
+        ))
 
 
 @dataclass(frozen=True)
@@ -319,7 +321,7 @@ class Duplicate:
         return self.discarded.line
 
 
-def _reject_constant(value: str) -> None:
+def _reject_constant(value: str):
     raise ValueError("invalid JSON number {!r}".format(value))
 
 
@@ -387,7 +389,8 @@ def _digest_number(value: Number, integral_limit: int = 18) -> str:
         and value == value.to_integral_value()
     ):
         return str(int(value))
-    return _number(value)
+    else:
+        return _number(value)
 
 
 def _require_str_key(name: Any) -> bool:
@@ -402,40 +405,40 @@ def _json_text(
     number: Callable[[Number], str],
 ) -> str:
     # Checks are ordered by frequency for object-heavy payloads. String escaping
-    # is delegated to CPython's C-accelerated encoder (`escape`) rather than a
-    # per-value `json.dumps`.
+    # is delegated to CPython's C-accelerated encoder (`escape`) rather than a per-value `json.dumps`.
     kind = type(value)
     if kind is str:
         return escape(value)
-    if kind is dict:
+    elif kind is dict:
         members = [
             escape(name) + ":" + _json_text(value[name], escape, number)
             for name in sorted(value)
             if type(name) is str or _require_str_key(name)
         ]
         return "{" + ",".join(members) + "}"
-    if kind is list or kind is tuple:
+    elif kind is list or kind is tuple:
         return "[" + ",".join([_json_text(item, escape, number) for item in value]) + "]"
-    if value is None:
+    elif value is None:
         return "null"
-    if value is True:
+    elif value is True:
         return "true"
-    if value is False:
+    elif value is False:
         return "false"
-    if isinstance(value, (Decimal, int, float)):
+    elif isinstance(value, (Decimal, int, float)):
         return number(value)
-    if isinstance(value, str):
+    elif isinstance(value, str):
         return escape(value)
-    if isinstance(value, (list, tuple)):
+    elif isinstance(value, (list, tuple)):
         return "[" + ",".join([_json_text(item, escape, number) for item in value]) + "]"
-    if isinstance(value, dict):
+    elif isinstance(value, dict):
         members = [
             escape(name) + ":" + _json_text(value[name], escape, number)
             for name in sorted(value)
             if type(name) is str or _require_str_key(name)
         ]
         return "{" + ",".join(members) + "}"
-    raise ValueError("unsupported JSON value type: {}".format(type(value).__name__))
+    else:
+        raise ValueError("unsupported JSON value type: {}".format(type(value).__name__))
 
 
 def _canonical_text(value: Any, ensure_ascii: bool = False) -> str:
@@ -449,13 +452,7 @@ def _details_text(value: Any, ensure_ascii: bool = False) -> str:
 
 
 def _canonical(value: Any) -> bytes:
-    return _canonical_text(value).encode("utf-8")
-
-
-def _content_canonical(value: Any) -> bytes:
-    # Bytes hashed for the content fingerprint. Uses the fast digest-only number
-    # formatter; identity encoding keeps `_canonical` so key notation round-trips.
-    return _json_text(value, _encode_basestring, _digest_number).encode("utf-8")
+    return _canonical_text(value).encode(utf8)
 
 
 if _msgspec is not None:
@@ -464,7 +461,7 @@ if _msgspec is not None:
         # as native ints and encodes them in full, so `_Num` integrals use the
         # raised digit limit to produce the same bytes. Tokens are emitted bare
         # (no quotes) so they never collide with real strings.
-        return _msgspec.Raw(_digest_number(value, _DIGEST_INTEGRAL_LIMIT).encode("utf-8"))
+        return _msgspec.Raw(_digest_number(value, _DIGEST_INTEGRAL_LIMIT).encode(utf8))
 
     _CONTENT_ENCODER = _msgspec.json.Encoder(order="sorted", enc_hook=_digest_raw)
 
@@ -473,6 +470,11 @@ if _msgspec is not None:
         # number is a _Num subclass, so enc_hook fires and yields identical
         # value-consistent bytes; the digest is hashed only, never decoded.
         return _CONTENT_ENCODER.encode(value)
+else:
+    def _content_canonical(value: Any) -> bytes:
+        # Bytes hashed for the content fingerprint. Uses the fast digest-only number
+        # formatter; identity encoding keeps `_canonical` so key notation round-trips.
+        return _json_text(value, _encode_basestring, _digest_number).encode(utf8)
 
 
 def _fingerprint(canonical: bytes) -> Tuple[int, bytes]:
@@ -487,19 +489,20 @@ def _pointer_child(path: str, token: str) -> str:
 def _schema_type(value: Any) -> str:
     if isinstance(value, bool):
         return "boolean"
-    if isinstance(value, str):
+    elif isinstance(value, str):
         return "string"
-    if isinstance(value, dict):
+    elif isinstance(value, dict):
         return "object"
-    if isinstance(value, list):
+    elif isinstance(value, list):
         return "array"
-    if isinstance(value, Decimal):
+    elif isinstance(value, Decimal):
         return "integer" if value == value.to_integral_value() else "number"
-    if isinstance(value, int):
+    elif isinstance(value, int):
         return "integer"
-    if isinstance(value, float):
+    elif isinstance(value, float):
         return "integer" if value.is_integer() else "number"
-    raise ValueError("unsupported JSON value type: {}".format(type(value).__name__))
+    else:
+        raise ValueError("unsupported JSON value type: {}".format(type(value).__name__))
 
 
 def _profile_schema(
@@ -507,7 +510,7 @@ def _profile_schema(
     ignore_tree: Dict[str, Any],
     fields: Dict[str, Any],
     objects: Dict[str, int],
-) -> None:
+):
     stack = [("", record, ignore_tree)]
     while stack:
         path, value, tree = stack.pop()
@@ -537,6 +540,7 @@ def _parse_pointer(pointer: str) -> Tuple[str, ...]:
         if pointer == "/":
             return ("",)
         raise ConfigurationError("ignore paths must be non-empty RFC 6901 JSON Pointers")
+
     tokens = []
     for token in pointer[1:].split("/"):
         index = 0
@@ -555,7 +559,7 @@ def _parse_pointer(pointer: str) -> Tuple[str, ...]:
 
 
 def _ignore_tree(paths: Sequence[str], keys: Sequence[str]) -> Dict[str, Any]:
-    tree = {}
+    tree = dict()
     for pointer in paths:
         tokens = _parse_pointer(pointer)
         if len(tokens) == 1 and tokens[0] in keys:
@@ -598,6 +602,7 @@ def _identity(
             value = None
         else:
             value = record[name]
+
         if value is None:
             # Composite identities may contain null components; uniqueness is
             # still enforced on the complete identity tuple. A single-field
@@ -607,6 +612,7 @@ def _identity(
                 raise ValueError("identity field {!r} must be a non-null scalar".format(name))
         elif not isinstance(value, (str, Decimal, bool, int, list, dict)):
             raise ValueError("identity field {!r} must be a JSON value".format(name))
+
         values.append(value)
     return tuple(values)
 
@@ -615,9 +621,7 @@ def _compile_where(expression: str) -> Any:
     try:
         return jmespath.compile(expression)
     except jmespath.exceptions.JMESPathError as error:
-        raise ConfigurationError(
-            "invalid --where expression {!r}: {}".format(expression, error),
-        ) from error
+        raise ConfigurationError("invalid --where expression {!r}: {}".format(expression, error)) from error
 
 
 def _normalize_array_numbers(value: Any) -> Any:
@@ -647,9 +651,10 @@ def _normalize_array_numbers(value: Any) -> Any:
         return value if isinstance(value, _Num) else _Num(value)
     if isinstance(value, list):
         return [_normalize_array_numbers(item) for item in value]
-    if isinstance(value, dict):
+    elif isinstance(value, dict):
         return {name: _normalize_array_numbers(item) for name, item in value.items()}
-    return value
+    else:
+        return value
 
 
 def _array_records(source: Any) -> Iterator[Any]:
@@ -659,10 +664,11 @@ def _array_records(source: Any) -> Iterator[Any]:
             prefix, event, _value = next(events)
         except StopIteration:
             raise ValueError("empty JSON input") from None
-        if (prefix, event) != ("", "start_array"):
-            raise ValueError("expected a top-level JSON array")
-        for record in ijson.items(events, "item"):
-            yield _normalize_array_numbers(record)
+        else:
+            if (prefix, event) != ("", "start_array"):
+                raise ValueError("expected a top-level JSON array")
+            for record in ijson.items(events, "item"):
+                yield _normalize_array_numbers(record)
 
 
 if _msgspec is not None:
@@ -703,15 +709,13 @@ class DiffResult:
         self.config = config
         self._ignore_tree = _ignore_tree(config.ignore, config.key)
         self._schema_ignore_tree = _ignore_tree(config.schema_ignore, ())
-        # Compiled during configuration validation and reused for every record;
-        # never compile inside the per-record processing loop.
-        self._where = config.where_expression
+        self._where = config.where_expression  # Compiled during configuration validation and reused for every record.
         self._workspace = None
         self._connection = None
         self._summary_value = None
         self._started = False
 
-    def _open(self) -> None:
+    def _open(self):
         try:
             self._workspace = tempfile.TemporaryDirectory(prefix="jsonl-diff-")
             self._connection = sqlite3.connect(os.path.join(self._workspace.name, "index.sqlite3"))
@@ -721,7 +725,7 @@ class DiffResult:
             self.close()
             raise ResourceError("could not create the temporary index") from error
 
-    def _configure_database(self) -> None:
+    def _configure_database(self):
         self._connection.execute("PRAGMA journal_mode = OFF")
         self._connection.execute("PRAGMA synchronous = OFF")
         self._connection.execute("PRAGMA temp_store = FILE")
@@ -735,7 +739,7 @@ class DiffResult:
             # workspace memory footprint remains bounded.
             self._connection.execute("PRAGMA cache_size = -65536")
 
-    def _create_schema(self) -> None:
+    def _create_schema(self):
         self._connection.execute(
             """
             CREATE TABLE records (
@@ -867,6 +871,7 @@ class DiffResult:
                 if new_record is None
                 else (old_record[0] > new_record[0]) - (old_record[0] < new_record[0])
             )
+
             if comparison < 0:
                 change = self._change(ChangeOperation.DELETED, old_record, None)
                 old_record = next(old_records, None)
@@ -883,6 +888,7 @@ class DiffResult:
                 )
                 old_record = next(old_records, None)
                 new_record = next(new_records, None)
+
             if change is not None and (requested is None or change.operation == requested):
                 yield change
 
@@ -891,15 +897,18 @@ class DiffResult:
         operation: Optional[SchemaChangeOperation] = None,
     ) -> Iterator[SchemaChange]:
         """Iterate observed schema changes in deterministic order."""
+
         if self._connection is None:
             raise RuntimeError("the diff result is closed")
-        if not self.config.schema_diff:
+        elif not self.config.schema_diff:
             raise RuntimeError("schema diff was not enabled")
+
         requested = None if operation is None else SchemaChangeOperation(operation)
         old_profiles = iter(self._schema_profiles(0))
         new_profiles = iter(self._schema_profiles(1))
         old_profile = next(old_profiles, None)
         new_profile = next(new_profiles, None)
+
         while old_profile is not None or new_profile is not None:
             comparison = (
                 1
@@ -932,6 +941,7 @@ class DiffResult:
                 changes = tuple(self._changed_schema_dimensions(old_profile, new_profile))
                 old_profile = next(old_profiles, None)
                 new_profile = next(new_profiles, None)
+
             for change in changes:
                 if requested is None or change.operation == requested:
                     yield change
@@ -962,10 +972,7 @@ class DiffResult:
             yield SchemaFieldProfile(row[0], *(int(value) for value in row[1:]))
 
     @staticmethod
-    def _changed_schema_dimensions(
-        old: SchemaFieldProfile,
-        new: SchemaFieldProfile,
-    ) -> Iterator[SchemaChange]:
+    def _changed_schema_dimensions(old: SchemaFieldProfile, new: SchemaFieldProfile) -> Iterator[SchemaChange]:
         if old.types != new.types:
             yield SchemaChange(SchemaChangeOperation.TYPES_CHANGED, old.path, old, new)
         if old.nullable != new.nullable:
@@ -992,7 +999,7 @@ class DiffResult:
         )
         for side, identity, selected_line, discarded_line, content_equal in rows:
             source = "OLD" if side == 0 else "NEW"
-            key = tuple(_decode_json(identity.decode("utf-8")))
+            key = tuple(_decode_json(identity.decode(utf8)))
             yield Duplicate(
                 key,
                 SourceLocation(source, selected_line),
@@ -1007,7 +1014,7 @@ class DiffResult:
         new_record: Optional[Tuple[Any, ...]],
     ) -> Change:
         record = old_record or new_record
-        key = tuple(_decode_json(record[0].decode("utf-8")))
+        key = tuple(_decode_json(record[0].decode(utf8)))
         old_line = None if old_record is None else old_record[1]
         new_line = None if new_record is None else new_record[1]
         return Change(
@@ -1017,7 +1024,7 @@ class DiffResult:
             None if new_line is None else SourceLocation("NEW", new_line),
         )
 
-    def close(self) -> None:
+    def close(self):
         """Release database and temporary files."""
         if self._connection is not None:
             try:
@@ -1052,26 +1059,20 @@ class DiffResult:
             self.close()
             raise
 
-    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any):
         self.close()
 
     def _insert_tolerated_record(
         self,
         cursor: sqlite3.Cursor,
         values: Tuple[Any, ...],
-    ) -> None:
-        cursor.execute(
-            "INSERT OR IGNORE INTO records VALUES (?, ?, ?, ?, ?)",
-            values,
-        )
+    ):
+        cursor.execute("INSERT OR IGNORE INTO records VALUES (?, ?, ?, ?, ?)", values)
         if cursor.rowcount != 0:
             return
         side, identity, line, length, digest = values
         if self.config.duplicates == DuplicatePolicy.FIRST:
-            cursor.execute(
-                "INSERT INTO duplicate_records VALUES (?, ?, ?, ?, ?)",
-                values,
-            )
+            cursor.execute("INSERT INTO duplicate_records VALUES (?, ?, ?, ?, ?)", values)
             return
         cursor.execute(
             """
@@ -1091,7 +1092,7 @@ class DiffResult:
             (line, length, digest, side, identity),
         )
 
-    def _insert_records(self, records: Iterable[Any], side: int, source: str) -> None:
+    def _insert_records(self, records: Iterable[Any], side: int, source: str):
         cursor = self._connection.cursor()
         schema_fields = {}
         schema_objects = {}
@@ -1168,7 +1169,7 @@ class DiffResult:
         cursor: sqlite3.Cursor,
         pending: list,
         source: str,
-    ) -> None:
+    ):
         try:
             cursor.executemany("INSERT INTO records VALUES (?, ?, ?, ?, ?)", pending)
         except sqlite3.IntegrityError:
@@ -1189,7 +1190,7 @@ class DiffResult:
                         "SELECT line FROM records WHERE side = ? AND identity = ?",
                         (row[0], row[1]),
                     ).fetchone()[0]
-                    key = tuple(_decode_json(row[1].decode("utf-8")))
+                    key = tuple(_decode_json(row[1].decode(utf8)))
                     raise DuplicateKeyError(key, source, (first, row[2])) from error
             pending.clear()
         except sqlite3.DatabaseError as error:
@@ -1203,7 +1204,7 @@ class DiffResult:
         side: int,
         fields: Dict[str, Any],
         objects: Dict[str, int],
-    ) -> None:
+    ):
         if objects:
             cursor.executemany(
                 """
@@ -1235,11 +1236,11 @@ class DiffResult:
             )
             fields.clear()
 
-    def _index(self, source: Any, side: int) -> None:
+    def _index(self, source: Any, side: int):
         name = "OLD" if side == 0 else "NEW"
         error_line = [None]
 
-        def on_error(line: int, error: Exception) -> None:
+        def on_error(line: int, error: Exception):
             error_line[0] = line
 
         try:
@@ -1254,7 +1255,7 @@ class DiffResult:
         except sqlite3.DatabaseError as error:
             raise ResourceError("could not build the temporary index") from error
 
-    def _check_size(self) -> None:
+    def _check_size(self):
         if self.config.max_temp is None:
             return
         usage = sum(
@@ -1294,9 +1295,7 @@ class DiffResult:
             ) AS matches
             """,
         ).fetchone()
-        total_old, total_new, matched, equal, old_dups, new_dups = (
-            int(value or 0) for value in row
-        )
+        total_old, total_new, matched, equal, old_dups, new_dups = (int(value or 0) for value in row)
         added = total_new - matched
         deleted = total_old - matched
         modified = matched - equal
@@ -1348,23 +1347,26 @@ def _configuration(
     if schema_ignores and not schema_diff:
         raise ConfigurationError("schema_ignore requires schema_diff=True")
     where_expression = None if where is None else _compile_where(where)
+
     try:
         duplicate_policy = DuplicatePolicy(duplicates)
     except ValueError as error:
         raise ConfigurationError("invalid duplicate policy {!r}".format(duplicates)) from error
+
     try:
         missing_key_policy = MissingKeyPolicy(missing_key)
     except ValueError as error:
-        raise ConfigurationError(
-            "invalid missing-key policy {!r}".format(missing_key),
-        ) from error
+        raise ConfigurationError("invalid missing-key policy {!r}".format(missing_key)) from error
+
     if (
         max_temp is not None
         and (not isinstance(max_temp, int) or isinstance(max_temp, bool) or max_temp <= 0)
     ):
         raise ConfigurationError("max_temp must be a positive integer")
+
     if input_format not in ("jsonl", "json"):
         raise ConfigurationError("invalid format {!r}".format(input_format))
+
     return DiffConfig(
         key=keys,
         ignore=ignores,
@@ -1465,7 +1467,7 @@ def _schema_summary_dict(summary: SchemaSummary) -> Dict[str, int]:
     }
 
 
-def _write_text(result: DiffResult) -> None:
+def _write_text(result: DiffResult):
     summary = result.summary
     print("Records:")
     print("  equal:     {:,}".format(summary.equal))
@@ -1484,8 +1486,9 @@ def _write_text(result: DiffResult) -> None:
         print("  requiredness changes:  {:,}".format(summary.schema.requiredness_changed))
 
 
-def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
-    def events() -> Iterator[Dict[str, Any]]:
+def _write_details(result: DiffResult, path: Union[str, os.PathLike]):
+
+    def events():
         metadata = {
             "type": "meta",
             "key": list(result.config.key),
@@ -1498,13 +1501,17 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
             metadata["schema_diff"] = True
             metadata["schema_ignore"] = list(result.config.schema_ignore)
         yield metadata
+
         if result.config.schema_diff:
             for schema_change in result.schema_changes():
                 yield _schema_change_dict(schema_change)
+
         for duplicate in result.duplicates():
             yield _duplicate_dict(duplicate)
+
         for change in result.changes():
             yield _change_dict(change)
+
         summary = {
             "type": "summary",
             "equal": result.equal,
@@ -1522,7 +1529,7 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]) -> None:
 
 
 class _ArgumentParser(argparse.ArgumentParser):
-    def error(self, message: str) -> None:
+    def error(self, message: str):
         self.print_usage(sys.stderr)
         self.exit(3, "{}: error: {}\n".format(self.prog, message))
 
@@ -1572,20 +1579,23 @@ def _run_comparison(arguments: argparse.Namespace, old: Any, new: Any, keys: Tup
         if not arguments.quiet:
             _write_text(result)
             sys.stdout.flush()
-        return 1 if result.has_issues else 0
+        return int(result.has_issues)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Run the jsonl-diff command-line interface."""
     parser = _parser()
     arguments = parser.parse_args(argv)
+
     if arguments.old == "-" and arguments.new == "-":
         parser.error("OLD and NEW cannot both read from stdin")
     if arguments.schema_ignore and not arguments.schema_diff:
         parser.error("--schema-ignore requires --schema-diff")
+
     old = sys.stdin.buffer if arguments.old == "-" else arguments.old
     new = sys.stdin.buffer if arguments.new == "-" else arguments.new
     keys = tuple(name.strip() for item in arguments.key for name in item.split(","))
+
     try:
         return _run_comparison(arguments, old, new, keys)
     except ConfigurationError as error:
