@@ -7,22 +7,30 @@ and delegates source/compression handling.
 
 ## SQLite index
 
-Each record is parsed and validated incrementally, normalized, and inserted
-into a private SQLite database under an operating-system temporary directory.
-The database stores the typed canonical identity, original line, content
-length, and SHA-256 digest; the full canonical bytes are not persisted. A
-uniqueness constraint detects duplicate identities. When `first` or `last`
-tolerates a collision, a second table stores the discarded occurrence's
-identity, physical line, canonical length, and digest. SQL joins calculate the
-summary, and ordered SQLite cursors drive lazy change and duplicate iteration.
+Each input is parsed and validated incrementally in a separate worker process.
+Every worker writes a private SQLite database under an operating-system
+temporary directory. After both workers finish, the parent merges those
+databases into the final index used for comparison. See
+[Parallel indexing](parallel-indexing.md) for the process lifecycle and error
+handling.
+
+The index stores the typed canonical identity, original line, content length,
+and SHA-256 digest; the full canonical bytes are not persisted. A uniqueness
+constraint detects duplicate identities. When `first` or `last` tolerates a
+collision, a second table stores the discarded occurrence's identity, physical
+line, canonical length, and digest. SQL joins calculate the summary, and
+ordered SQLite cursors drive lazy change and duplicate iteration.
 
 This architecture bounds memory by the records currently being processed and
 database buffers; it does not keep the complete decoded inputs or all changes
 in RAM. It does require temporary disk space. The identity, line, length, and
 digest index remains until the `DiffResult` is closed, so temporary usage
 scales with the number of selected records plus tolerated duplicate
-occurrences rather than the combined input size. Duplicate diagnostics compare
-stored fingerprints and do not require retaining or rereading full records.
+occurrences rather than the combined input size for path and URL sources.
+File-like objects and stdin are first copied into the workspace so both workers
+can reopen them, so those sources temporarily require their full encoded size
+in addition to the indexes. Duplicate diagnostics compare stored fingerprints
+and do not require retaining or rereading full records.
 
 ## Observed-schema profile
 
@@ -53,13 +61,14 @@ raises `ResourceError` (CLI exit `2`) when the workspace is observed above the
 configured budget. Choose a limit with room for SQLite pages and index
 overhead.
 
-The filesystem-level check (stat-ing every workspace file) runs every 1024
-inserted records per side, plus once more after each side finishes, rather
-than after every record; this keeps large-input indexing fast. SQLite's own
-`max_page_count` (derived from `max_temp`) still rejects oversized writes to
-the main index immediately, but it does not account for every file in the
-workspace and the periodic filesystem check can observe growth between
-checks.
+The filesystem-level check (stat-ing every workspace file) runs while streams
+are staged, every 1024 inserted records per side, once after each side
+finishes, and after each worker database is merged. The merge checks matter
+because worker databases coexist temporarily with the growing final index.
+SQLite's own `max_page_count` (derived from `max_temp`) still rejects an
+oversized individual database immediately, but it does not account for every
+file in the workspace and the periodic filesystem checks can observe growth
+between checks.
 
 `py-jsonl` may create its own temporary staging files for remote or compressed
 sources. Those files follow `py-jsonl`'s resource policy and are not counted by
@@ -68,9 +77,11 @@ exceed the configured value.
 
 ## Cleanup
 
-The private workspace is removed on context-manager exit, explicit `close()`,
-or a handled failure during construction. Cleanup failures are emitted as
-warnings rather than replacing the primary error.
+Worker databases are removed immediately after a successful merge or failed
+parallel attempt. The complete private workspace, including staged stream
+inputs and the final index, is removed on context-manager exit, explicit
+`close()`, or a handled failure during construction. Cleanup failures are
+emitted as warnings rather than replacing the primary error.
 
 ## Sources and compression
 

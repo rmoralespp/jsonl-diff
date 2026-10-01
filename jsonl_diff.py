@@ -723,37 +723,6 @@ else:
         )
 
 
-def _parallel_setting() -> Optional[bool]:
-    """Return the explicit `JSONL_DIFF_PARALLEL` choice, or None for automatic."""
-    setting = os.environ.get("JSONL_DIFF_PARALLEL")
-    if setting is None:
-        return None
-    return setting not in ("0", "")
-
-
-def _cli_entry_point() -> bool:
-    """
-    Return whether `__main__` is the jsonl-diff command line entry point.
-
-    Every start method except `fork` re-imports `__main__` in each worker, so
-    an embedding application's module-level code would run once per side, and
-    an unguarded one cannot start workers at all. Automatic parallel indexing
-    is therefore limited to our own CLI, whose module guard makes re-import
-    safe; library callers ask for it with `JSONL_DIFF_PARALLEL=1`.
-    """
-    module = sys.modules.get("__main__")
-    if module is None:
-        return False
-    # `python -m jsonl_diff` runs this module itself as `__main__`; the
-    # console script does `from jsonl_diff import main`. Both leave `main`
-    # bound to this module's own function, which beats matching file names
-    # (the Windows entry point is an `.exe`, or a `-script.py` shim).
-    if getattr(module, "main", None) is main:
-        return True
-    spec = getattr(module, "__spec__", None)
-    return spec is not None and spec.name in ("jsonl_diff", "jsonl_diff.__main__")
-
-
 def _multiprocessing_context() -> Any:
     import multiprocessing
 
@@ -801,22 +770,18 @@ class DiffResult:
         self._schema_ignore_tree = _ignore_tree(config.schema_ignore, ())
         self._where = config.where_expression  # Compiled during configuration validation and reused for every record.
         self._workspace = None
+        self._workspace_path = None
         self._connection = None
         self._summary_value = None
         self._started = False
 
-    def _open(self):
-        try:
-            self._open_workspace()
-            self._open_connection(os.path.join(self._workspace.name, "index.sqlite3"))
-        except (OSError, sqlite3.Error) as error:
-            self.close()
-            raise ResourceError("could not create the temporary index") from error
-
     def _open_workspace(self) -> None:
         self._workspace = tempfile.TemporaryDirectory(prefix="jsonl-diff-")
+        self._workspace_path = self._workspace.name
 
     def _open_connection(self, path: str) -> None:
+        if self._workspace_path is None:
+            self._workspace_path = os.path.dirname(path)
         self._connection = sqlite3.connect(path)
         self._configure_database()
         self._create_schema()
@@ -1146,12 +1111,7 @@ class DiffResult:
             raise RuntimeError("the diff result cannot be entered more than once")
         self._started = True
         try:
-            if self._parallel_eligible():
-                self._index_parallel()
-            else:
-                self._open()
-                self._index(self._old, 0)
-                self._index(self._new, 1)
+            self._index_parallel()
             self._summary_value = self._calculate_summary()
             return self
         except BaseException:
@@ -1354,28 +1314,6 @@ class DiffResult:
         except sqlite3.DatabaseError as error:
             raise ResourceError("could not build the temporary index") from error
 
-    def _parallel_eligible(self) -> bool:
-        """Return whether both sides can be indexed in separate processes."""
-        setting = _parallel_setting()
-        if setting is False:
-            return False
-        # The default start method may re-import `__main__` in each worker
-        # (every method except `fork`), which is only known to be safe for our
-        # own CLI. A library caller opts in with `JSONL_DIFF_PARALLEL=1`.
-        if setting is None and not _cli_entry_point():
-            return False
-        # Each worker owns a private database, so the parent cannot enforce a
-        # single combined budget while they run. Keep the sequential path,
-        # whose incremental `_check_size` is what `--max-temp` promises.
-        if self.config.max_temp is not None:
-            return False
-        # Only re-openable, picklable sources survive a process boundary; file
-        # objects and stdin must stay in this process.
-        return all(
-            isinstance(source, (str, os.PathLike)) and os.fspath(source) != "-"
-            for source in (self._old, self._new)
-        )
-
     def _index_parallel(self) -> None:
         context = _multiprocessing_context()
         try:
@@ -1386,14 +1324,18 @@ class DiffResult:
             os.path.join(self._workspace.name, "side{}.sqlite3".format(side))
             for side in (0, 1)
         ]
+        sources = [
+            self._parallel_source(source, side)
+            for side, source in enumerate((self._old, self._new))
+        ]
         # `fork` inherits the compiled `--where` expression and every other
         # start method pickles it; either way the worker gets the config as it
         # stands here.
         workers = []
-        for side, source in enumerate((self._old, self._new)):
+        for side, source in enumerate(sources):
             process = context.Process(
                 target=_index_worker,
-                args=(paths[side], os.fspath(source), side, self.config),
+                args=(paths[side], source, side, self.config),
                 daemon=True,
             )
             process.start()
@@ -1403,6 +1345,11 @@ class DiffResult:
         for process in workers:
             process.join()
             failed = failed or process.exitcode != 0
+
+        if failed:
+            # Preserve a shared-workspace limit failure instead of allowing the
+            # smaller sequential recovery index to hide it.
+            self._check_size()
 
         try:
             self._open_connection(os.path.join(self._workspace.name, "index.sqlite3"))
@@ -1429,8 +1376,40 @@ class DiffResult:
             # and OLD-before-NEW ordering the sequential path always produced.
             # A failure that does not reproduce was transient, and this pass
             # simply succeeds.
-            self._index(self._old, 0)
-            self._index(self._new, 1)
+            self._index(sources[0], 0)
+            self._index(sources[1], 1)
+
+    def _parallel_source(self, source: Any, side: int) -> str:
+        if isinstance(source, (str, os.PathLike)):
+            return os.fspath(source)
+
+        path = os.path.join(self._workspace.name, "input{}".format(side))
+        name = "OLD" if side == 0 else "NEW"
+        try:
+            with open(path, "wb") as destination:
+                self._copy_parallel_source(source, destination, name)
+        except OSError as error:
+            raise ResourceError("could not write the temporary input") from error
+        return path
+
+    def _copy_parallel_source(self, source: Any, destination: Any, name: str) -> None:
+        while True:
+            try:
+                chunk = source.read(1024 * 1024)
+            except (OSError, EOFError, ValueError, RuntimeError) as error:
+                raise InputError(
+                    "invalid input ({})".format(type(error).__name__),
+                    name,
+                ) from error
+            if not chunk:
+                break
+            if isinstance(chunk, str):
+                chunk = chunk.encode(utf8)
+            try:
+                destination.write(chunk)
+            except OSError as error:
+                raise ResourceError("could not write the temporary input") from error
+            self._check_size()
 
     def _merge_worker_databases(self, paths: Sequence[str]) -> None:
         tables = ["records", "duplicate_records"]
@@ -1455,13 +1434,14 @@ class DiffResult:
                         )
             finally:
                 self._connection.execute("DETACH DATABASE {}".format(alias))
+            self._check_size()
 
     def _check_size(self):
         if self.config.max_temp is None:
             return
         usage = sum(
             entry.stat().st_size
-            for entry in Path(self._workspace.name).iterdir()
+            for entry in Path(self._workspace_path).iterdir()
             if entry.is_file()
         )
         if usage > self.config.max_temp:

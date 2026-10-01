@@ -160,9 +160,6 @@ select = [
     "PLE",
     "PLW",
 
-    # flake8-commas
-    "COM812", # Trailing comma missing
-
     # Ruff-specific rules
     "RUF024", # Do not pass mutable objects as values to dict.fromkeys
     "RUF026", # default_factory is a positional-only argument to defaultdict

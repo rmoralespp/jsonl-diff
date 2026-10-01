@@ -6,7 +6,9 @@
   keeping token parsing and item construction in the native yajl2_c pipeline
 * **Changed:** Parse top-level JSON arrays through `ijson`'s native `items()` pipeline, avoiding Python event bridging 
   while preserving incremental reads and exact numeric semantics.
-* **Changed:** Add parallel indexing for large local inputs
+* **Changed:** Always index OLD and NEW in parallel worker processes. File-like
+  inputs and stdin are staged in the temporary workspace, while `max_temp`
+  continues to cover worker databases, stream copies, and merge-time usage.
 * **Changed:** Speed up array number normalization
 
 ## v0.1.5
