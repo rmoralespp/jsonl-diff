@@ -2,9 +2,13 @@
 
 ## Unreleased
 
-* **Changed:** Changed: Speed up incremental parsing of top-level JSON arrays by passing streams directly to ijson.items(),
-  keeping token parsing and item construction in the native yajl2_c pipeline while preserving incremental reads and exact numeric semantics.
-* **Changed:** Add parallel indexing for large local inputs
+* **Changed:** Speed up incremental JSON array parsing: pass top-level JSON array streams directly to ijson.items(), 
+  keeping token parsing and item construction in the native yajl2_c pipeline
+* **Changed:** Parse top-level JSON arrays through `ijson`'s native `items()` pipeline, avoiding Python event bridging 
+  while preserving incremental reads and exact numeric semantics.
+* **Changed:** Always index OLD and NEW in parallel worker processes. File-like
+  inputs and stdin are staged in the temporary workspace, while `max_temp`
+  continues to cover worker databases, stream copies, and merge-time usage.
 * **Changed:** Speed up array number normalization
 * **Changed:** Speed up identity extraction with precompiled C-level field lookups while preserving missing-field and null-key behavior.
 * **Changed:** Make `msgspec` a required dependency and the single JSONL

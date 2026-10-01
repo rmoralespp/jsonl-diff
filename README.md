@@ -260,6 +260,7 @@ It is a **dataset reconciliation tool**, not a general-purpose visual JSON diff.
 
 * [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) — identity, duplicates, ignores, `--where`, numeric representation, determinism.
 * [Disk-backed architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md) — SQLite index, `max_temp`, cleanup, sources and compression.
+* [Parallel indexing](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/parallel-indexing.md) — worker lifecycle, database merge, error recovery, and multiprocessing requirements.
 * [Details JSONL format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md) — machine-readable `--details` output schema.
 * [Python API reference](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/python-api.md) — full signature, result models, and error hierarchy.
 
