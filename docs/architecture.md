@@ -50,35 +50,12 @@ counts, so profiling does not perform one database write for every field in
 every record. Memory scales with the distinct paths in the current batch and
 record; disk usage scales with distinct observed paths rather than the number
 of records. Datasets with dynamic property names can still create large
-profiles, and those tables count toward `max_temp`.
+profiles.
 
 Schema profiling happens during the original input pass and does not retain
 complete records or reread a source. It therefore works with stdin, remote,
 and compressed sources. Nested objects are traversed iteratively. Arrays are
 profiled as terminal `array` values; their elements are not inferred.
-
-## `max_temp` / `--max-temp`
-
-`max_temp` / `--max-temp` accepts a positive byte count and acts as a
-best-effort budget for files in the workspace owned by `jsonl-diff`; it is not
-a global temporary-storage limit for the whole process. The implementation
-raises `ResourceError` (CLI exit `2`) when the workspace is observed above the
-configured budget. Choose a limit with room for SQLite pages and index
-overhead.
-
-The filesystem-level check (stat-ing every workspace file) runs while streams
-are staged, every 1024 inserted records per side, once after each side
-finishes, and after each worker database is merged. The merge checks matter
-because worker databases coexist temporarily with the growing final index.
-SQLite's own `max_page_count` (derived from `max_temp`) still rejects an
-oversized individual database immediately, but it does not account for every
-file in the workspace and the periodic filesystem checks can observe growth
-between checks.
-
-`py-jsonl` may create its own temporary staging files for remote or compressed
-sources. Those files follow `py-jsonl`'s resource policy and are not counted by
-`jsonl-diff`'s `max_temp` limit. Total system temporary usage can therefore
-exceed the configured value.
 
 ## Cleanup
 

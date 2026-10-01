@@ -17,7 +17,6 @@ with diff(
         ignore=("/updated_at",),
         where="country == `\"ES\"`",
         duplicates="error",
-        max_temp=2_000_000_000,
         schema_diff=True,
         schema_ignore=("/metadata",),
         format="jsonl",
@@ -47,7 +46,6 @@ def diff(
         ignore: Sequence[str] = (),
         where: Optional[str] = None,
         duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
-        max_temp: Optional[int] = None,
         schema_diff: bool = False,
         schema_ignore: Sequence[str] = (),
         format: str = "jsonl",
@@ -168,10 +166,10 @@ writes identity values as JSON values, including arbitrary-precision numbers.
 
 The public error hierarchy starts with `JsonlDiffError`:
 
-- `ConfigurationError`: invalid keys, ignore pointers, schema options, or `max_temp`;
+- `ConfigurationError`: invalid keys, ignore pointers, or schema options;
 - `InputError`: an invalid source or record; exposes `source` and optional `line`;
 - `DuplicateKeyError`: an `InputError` with `key` and the first/repeated physical lines in `lines`;
-- `ResourceError`: the temporary index cannot be created, written, or kept within its configured limit.
+- `ResourceError`: the temporary index cannot be created or written.
 
 Failures during `diff()` clean up the workspace before the exception is
 raised.

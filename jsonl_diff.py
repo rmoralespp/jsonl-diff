@@ -15,7 +15,6 @@ from enum import Enum
 from json.encoder import encode_basestring as _encode_basestring
 from json.encoder import encode_basestring_ascii as _encode_basestring_ascii
 from operator import itemgetter
-from pathlib import Path
 from typing import Any, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
 import ijson
@@ -31,9 +30,7 @@ IdentityKey = Tuple[JsonIdentityValue, ...]
 
 _MISSING = object()
 
-# Avoid per-record filesystem scans: SQLite already enforces the main size limit.
-# Check periodically and once after each side finishes to catch extra temp/journal growth.
-_SIZE_CHECK_INTERVAL = 1024
+_SCHEMA_FLUSH_INTERVAL = 1024
 # Records are inserted in batches to amortize per-statement overhead.
 _INSERT_BATCH = 2048
 _SCHEMA_TYPE_INDEXES = {
@@ -250,7 +247,6 @@ class DiffConfig:
     ignore: Tuple[str, ...] = ()
     where: Optional[str] = None
     duplicates: DuplicatePolicy = DuplicatePolicy.ERROR
-    max_temp: Optional[int] = None
     where_expression: Any = None
     schema_diff: bool = False
     schema_ignore: Tuple[str, ...] = ()
@@ -563,18 +559,14 @@ class DiffResult:
         self._identity_is_composite = len(config.key) > 1
         self._where = config.where_expression  # Compiled during configuration validation and reused for every record.
         self._workspace = None
-        self._workspace_path = None
         self._connection = None
         self._summary_value = None
         self._started = False
 
     def _open_workspace(self) -> None:
         self._workspace = tempfile.TemporaryDirectory(prefix="jsonl-diff-")
-        self._workspace_path = self._workspace.name
 
     def _open_connection(self, path: str) -> None:
-        if self._workspace_path is None:
-            self._workspace_path = os.path.dirname(path)
         self._connection = sqlite3.connect(path)
         self._configure_database()
         self._create_schema()
@@ -583,15 +575,7 @@ class DiffResult:
         self._connection.execute("PRAGMA journal_mode = OFF")
         self._connection.execute("PRAGMA synchronous = OFF")
         self._connection.execute("PRAGMA temp_store = FILE")
-        if self.config.max_temp is not None:
-            pages = max(1, self.config.max_temp // 4096)
-            self._connection.execute("PRAGMA page_size = 4096")
-            self._connection.execute("PRAGMA max_page_count = {}".format(pages))
-        else:
-            # A larger page cache speeds bulk index writes and the summary read.
-            # Skipped under max_temp so on-disk growth stays observable and the
-            # workspace memory footprint remains bounded.
-            self._connection.execute("PRAGMA cache_size = -65536")
+        self._connection.execute("PRAGMA cache_size = -65536")
 
     def _create_schema(self):
         self._connection.execute(
@@ -972,20 +956,15 @@ class DiffResult:
                 except (TypeError, ValueError) as error:
                     raise InputError(str(error), source, line) from error
                 if not matched:
-                    if (
-                        self.config.schema_diff or self.config.max_temp is not None
-                    ) and line % _SIZE_CHECK_INTERVAL == 0:
+                    if self.config.schema_diff and line % _SCHEMA_FLUSH_INTERVAL == 0:
                         if pending:
                             self._flush_record_batch(cursor, pending, source)
-                        if self.config.schema_diff:
-                            self._flush_schema_profile(
-                                cursor,
-                                side,
-                                schema_fields,
-                                schema_objects,
-                            )
-                        if self.config.max_temp is not None:
-                            self._check_size()
+                        self._flush_schema_profile(
+                            cursor,
+                            side,
+                            schema_fields,
+                            schema_objects,
+                        )
                     continue
             try:
                 key = self._extract_identity(record)
@@ -1015,20 +994,14 @@ class DiffResult:
                     self._insert_tolerated_record(cursor, values)
                 except sqlite3.DatabaseError as error:
                     raise ResourceError("could not write the temporary index") from error
-            if (
-                self.config.schema_diff or self.config.max_temp is not None
-            ) and line % _SIZE_CHECK_INTERVAL == 0:
+            if self.config.schema_diff and line % _SCHEMA_FLUSH_INTERVAL == 0:
                 if pending:
                     self._flush_record_batch(cursor, pending, source)
-                if self.config.schema_diff:
-                    self._flush_schema_profile(cursor, side, schema_fields, schema_objects)
-                if self.config.max_temp is not None:
-                    self._check_size()
+                self._flush_schema_profile(cursor, side, schema_fields, schema_objects)
         if pending:
             self._flush_record_batch(cursor, pending, source)
         if self.config.schema_diff:
             self._flush_schema_profile(cursor, side, schema_fields, schema_objects)
-        self._check_size()
 
     @staticmethod
     def _flush_record_batch(
@@ -1153,11 +1126,6 @@ class DiffResult:
             process.join()
             failed = failed or process.exitcode != 0
 
-        if failed:
-            # Preserve a shared-workspace limit failure instead of allowing the
-            # smaller sequential recovery index to hide it.
-            self._check_size()
-
         try:
             self._open_connection(os.path.join(self._workspace.name, "index.sqlite3"))
             if not failed:
@@ -1200,6 +1168,14 @@ class DiffResult:
         return path
 
     def _copy_parallel_source(self, source: Any, destination: Any, name: str) -> None:
+        """
+        Stage a stream so spawned workers and error recovery can reopen it.
+
+        Stdin and arbitrary file-like objects are not reliably pickleable,
+        reopenable, or seekable. Copying them in bounded chunks gives workers
+        a path and preserves a complete source for the sequential recovery pass
+        without loading the input into memory.
+        """
         while True:
             try:
                 chunk = source.read(1024 * 1024)
@@ -1216,7 +1192,6 @@ class DiffResult:
                 destination.write(chunk)
             except OSError as error:
                 raise ResourceError("could not write the temporary input") from error
-            self._check_size()
 
     def _merge_worker_databases(self, paths: Sequence[str]) -> None:
         tables = ["records", "duplicate_records"]
@@ -1241,20 +1216,6 @@ class DiffResult:
                         )
             finally:
                 self._connection.execute("DETACH DATABASE {}".format(alias))
-            self._check_size()
-
-    def _check_size(self):
-        if self.config.max_temp is None:
-            return
-        usage = sum(
-            entry.stat().st_size
-            for entry in Path(self._workspace_path).iterdir()
-            if entry.is_file()
-        )
-        if usage > self.config.max_temp:
-            raise ResourceError(
-                "temporary storage exceeded {}".format(self.config.max_temp),
-            )
 
     def _calculate_summary(self) -> Summary:
         # Derive the four record totals from a single identity join (matched
@@ -1316,7 +1277,6 @@ def _configuration(
     ignore: Sequence[str],
     where: Optional[str],
     duplicates: Union[str, DuplicatePolicy],
-    max_temp: Optional[int],
     schema_diff: bool,
     schema_ignore: Sequence[str],
     input_format: str,
@@ -1346,12 +1306,6 @@ def _configuration(
     except ValueError as error:
         raise ConfigurationError("invalid missing-key policy {!r}".format(missing_key)) from error
 
-    if (
-        max_temp is not None
-        and (not isinstance(max_temp, int) or isinstance(max_temp, bool) or max_temp <= 0)
-    ):
-        raise ConfigurationError("max_temp must be a positive integer")
-
     if input_format not in ("jsonl", "json"):
         raise ConfigurationError("invalid format {!r}".format(input_format))
 
@@ -1361,7 +1315,6 @@ def _configuration(
         where=where,
         duplicates=duplicate_policy,
         missing_key=missing_key_policy,
-        max_temp=max_temp,
         where_expression=where_expression,
         schema_diff=schema_diff,
         schema_ignore=schema_ignores,
@@ -1378,7 +1331,6 @@ def diff(
     where: Optional[str] = None,
     duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
     missing_key: Union[str, MissingKeyPolicy] = MissingKeyPolicy.ERROR,
-    max_temp: Optional[int] = None,
     schema_diff: bool = False,
     schema_ignore: Sequence[str] = (),
     format: str = "jsonl",  # noqa: A002
@@ -1389,7 +1341,6 @@ def diff(
         ignore,
         where,
         duplicates,
-        max_temp,
         schema_diff,
         schema_ignore,
         format,
@@ -1543,7 +1494,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--schema-diff", action="store_true")
     parser.add_argument("--schema-ignore", action="append", default=[], metavar="POINTER")
     parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--max-temp", type=int)
     parser.add_argument("--format", choices=("jsonl", "json"), default="jsonl")
     return parser
 
@@ -1557,7 +1507,6 @@ def _run_comparison(arguments: argparse.Namespace, old: Any, new: Any, keys: Tup
         where=arguments.where,
         duplicates=arguments.duplicates,
         missing_key=arguments.missing_key,
-        max_temp=arguments.max_temp,
         schema_diff=arguments.schema_diff,
         schema_ignore=arguments.schema_ignore,
         format=arguments.format,

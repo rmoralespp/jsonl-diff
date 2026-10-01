@@ -38,8 +38,7 @@ starting the workers.
 This staging keeps stream support consistent across multiprocessing start
 methods and gives the error-recovery pass a complete source to reread. It also
 means stream inputs require temporary space for both their encoded content and
-their SQLite indexes. These files count toward `max_temp` and are removed with
-the workspace.
+their SQLite indexes. These files are removed with the workspace.
 
 ## Worker failures
 
@@ -63,13 +62,8 @@ read twice before the error is reported.
 Parallel indexing temporarily holds both worker databases. During the merge,
 the growing final database also coexists with them, so peak workspace usage can
 be approximately twice the final index size. Worker databases are deleted as
-soon as the merge attempt finishes.
-
-When `max_temp` / `--max-temp` is configured, each worker periodically measures
-the shared workspace. The parent checks it again after each worker database is
-merged, covering the phase where worker and final databases coexist. See
-[Disk-backed architecture](architecture.md) for the full resource-limit
-semantics.
+soon as the merge attempt finishes. The temporary volume must have enough free
+space for this peak.
 
 ## Application entry points
 
