@@ -34,7 +34,7 @@ class TestDiffSummary:
         # Assert
         assert change.operation == ChangeOperation.MODIFIED
 
-    def test_json_array_numbers_use_jsonl_numeric_semantics(self, tmp_path):
+    def test_json_array_content_preserves_parsed_numeric_representation(self, tmp_path):
         # Arrange
         old = tmp_path / "old.json"
         new = tmp_path / "new.json"
@@ -46,7 +46,42 @@ class TestDiffSummary:
             summary = result.summary
 
         # Assert
-        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+        assert summary == Summary(equal=0, added=0, deleted=0, modified=1)
+
+    @pytest.mark.parametrize(
+        "input_format,old_content,new_content",
+        [
+            (
+                "jsonl",
+                '{"id":1,"value":%s}\n',
+                '{"id":1,"value":1e100}\n',
+            ),
+            (
+                "json",
+                '[{"id":1,"value":%s}]',
+                '[{"id":1,"value":1e100}]',
+            ),
+        ],
+    )
+    def test_arbitrary_size_integer_content_differs_from_exponent_notation(
+        self,
+        tmp_path,
+        input_format,
+        old_content,
+        new_content,
+    ):
+        # Arrange
+        old = tmp_path / ("old." + input_format)
+        new = tmp_path / ("new." + input_format)
+        old.write_text(old_content % ("1" + "0" * 100), encoding="utf-8")
+        new.write_text(new_content, encoding="utf-8")
+
+        # Act
+        with diff(old, new, key="id", format=input_format) as result:
+            summary = result.summary
+
+        # Assert
+        assert summary == Summary(equal=0, added=0, deleted=0, modified=1)
 
     def test_json_array_locations_are_one_based_element_ordinals(self, tmp_path):
         # Arrange
@@ -166,14 +201,15 @@ class TestIdentityKeys:
 
         assert summary == Summary(equal=0, added=1, deleted=1, modified=0)
 
-    def test_identity_nested_numbers_use_json_numeric_semantics(self, write_jsonl):
+    def test_identity_nested_numbers_match_before_content_comparison(self, write_jsonl):
         old = write_jsonl("old.jsonl", ['{"id":{"version":1,"values":[2.0]}}'])
         new = write_jsonl("new.jsonl", ['{"id":{"version":1.0,"values":[2e0]}}'])
 
         with diff(old, new, key="id") as result:
-            summary = result.summary
+            change = next(result.changes())
 
-        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+        assert change.operation == ChangeOperation.MODIFIED
+        assert change.key == ({"version": Decimal("1"), "values": [Decimal("2")]},)
 
     def test_composite_key_is_returned_as_typed_tuple(self, write_jsonl):
         # Arrange
@@ -228,7 +264,7 @@ class TestIdentityKeys:
             ("-0", "0.0"),
         ],
     )
-    def test_numerically_equal_identity_and_content_are_equal(
+    def test_numerically_equal_identity_with_different_content_notation_is_modified(
         self,
         write_jsonl,
         old_number,
@@ -243,7 +279,7 @@ class TestIdentityKeys:
             summary = result.summary
 
         # Assert
-        assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+        assert summary == Summary(equal=0, added=0, deleted=0, modified=1)
 
     def test_extreme_exponents_remain_compact(self, write_jsonl):
         # Arrange

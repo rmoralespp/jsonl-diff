@@ -21,11 +21,7 @@ from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Sequence, 
 import ijson
 import jmespath
 import jsonl
-
-try:  # Optional C-accelerated content canonicalization (Python 3.10+).
-    import msgspec as _msgspec
-except ImportError:
-    _msgspec = None
+import msgspec
 
 utf8 = "utf-8"
 
@@ -34,24 +30,9 @@ Number = Union[Decimal, int, float]
 IdentityKey = Tuple[JsonIdentityValue, ...]
 
 
-class _Num(Decimal):
-    """Decimal subclass parsed numbers use so msgspec routes them through enc_hook."""
-
-    __slots__ = ()
-
-
 _MISSING = object()
 
 _DIGITS = ("0", "1", "2", "3", "4", "5", "6", "7", "8", "9")
-
-# Integral digit limit for the msgspec content encoder only. Because msgspec's
-# parser emits integer literals as native `int` and its encoder always writes
-# them out in full, `_Num` float integrals must use the fast plain-integer form
-# over the same range to stay byte-consistent. The bound stays within CPython's
-# default integer-to-string limit so huge float exponents (e.g. 1e50000000) still
-# fall back to scientific form and never materialise as gigantic integers. The
-# pure-Python fallback keeps the lower default limit in `_digest_number`.
-_DIGEST_INTEGRAL_LIMIT = 4300
 
 # Avoid per-record filesystem scans: SQLite already enforces the main size limit.
 # Check periodically and once after each side finishes to catch extra temp/journal growth.
@@ -375,25 +356,6 @@ def _details_number(value: Number) -> str:
     return str(value).lower()
 
 
-def _digest_number(value: Number, integral_limit: int = 18) -> str:
-    # Formats numbers for the content fingerprint only (hashed, never decoded or
-    # displayed), so it just needs value-consistent bytes. Integrals with fewer
-    # than `integral_limit` digits use the fast plain-integer form; classifying by
-    # value keeps `1`, `1.0` and `1e0` identical. Fractions and larger integrals
-    # fall back to the exact scientific form and are never materialised in full.
-    # The default limit matches the pure-Python fallback; the msgspec encoder
-    # raises it (see `_digest_raw`) so `_Num` integrals agree with the full-digit
-    # bytes msgspec writes for native ints.
-    if (
-        isinstance(value, Decimal)
-        and value.adjusted() < integral_limit
-        and value == value.to_integral_value()
-    ):
-        return str(int(value))
-    else:
-        return _number(value)
-
-
 def _require_str_key(name: Any) -> bool:
     if isinstance(name, str):
         return True
@@ -456,26 +418,14 @@ def _canonical(value: Any) -> bytes:
     return _canonical_text(value).encode(utf8)
 
 
-if _msgspec is not None:
-    def _digest_raw(value: Number) -> Any:
-        # enc_hook only fires for `_Num`, msgspec's parser writes integer literals
-        # as native ints and encodes them in full, so `_Num` integrals use the
-        # raised digit limit to produce the same bytes. Tokens are emitted bare
-        # (no quotes) so they never collide with real strings.
-        return _msgspec.Raw(_digest_number(value, _DIGEST_INTEGRAL_LIMIT).encode(utf8))
+_CONTENT_ENCODER = msgspec.json.Encoder(
+    decimal_format="number",
+    order="sorted",
+)
 
-    _CONTENT_ENCODER = _msgspec.json.Encoder(order="sorted", enc_hook=_digest_raw)
 
-    def _content_canonical(value: Any) -> bytes:
-        # C-accelerated equivalent of the pure-Python serializer above. Every
-        # number is a _Num subclass, so enc_hook fires and yields identical
-        # value-consistent bytes; the digest is hashed only, never decoded.
-        return _CONTENT_ENCODER.encode(value)
-else:
-    def _content_canonical(value: Any) -> bytes:
-        # Bytes hashed for the content fingerprint. Uses the fast digest-only number
-        # formatter; identity encoding keeps `_canonical` so key notation round-trips.
-        return _json_text(value, _encode_basestring, _digest_number).encode(utf8)
+def _content_canonical(value: Any) -> bytes:
+    return _CONTENT_ENCODER.encode(value)
 
 
 def _fingerprint(canonical: bytes) -> Tuple[int, bytes]:
@@ -625,39 +575,6 @@ def _compile_where(expression: str) -> Any:
         raise ConfigurationError("invalid --where expression {!r}: {}".format(expression, error)) from error
 
 
-def _normalize_array_numbers(value: Any) -> Any:
-    # Dispatches on exact type, leaves before containers. Leaves necessarily
-    # outnumber containers in a tree whose average branching exceeds one, and a
-    # node census over the sample corpora bears that out: 73-89 % of visited
-    # nodes are leaves. Within the leaves, `Decimal` goes last because it is
-    # the only one that needs work; the rest are returned untouched.
-    # The census itself is not used to order the checks any further, because
-    # all four files are database dumps whose identifiers and dates are
-    # strings: `int` occurs in one of them and `Decimal` in none. Ordering by
-    # those frequencies would cost 6-8 points on numeric payloads.
-    # `_Num` subclasses `Decimal`, so `type(value) is Decimal` on its own
-    # already excludes values a previous pass converted. Subclasses of the
-    # exact types fall through to the isinstance tail, which preserves the
-    # original behaviour.
-    kind = type(value)
-    if kind is str or value is None or kind is int or kind is bool:
-        return value
-    if kind is Decimal:
-        return _Num(value)
-    if kind is dict:
-        return {name: _normalize_array_numbers(item) for name, item in value.items()}
-    if kind is list:
-        return [_normalize_array_numbers(item) for item in value]
-    if isinstance(value, Decimal):
-        return value if isinstance(value, _Num) else _Num(value)
-    if isinstance(value, list):
-        return [_normalize_array_numbers(item) for item in value]
-    elif isinstance(value, dict):
-        return {name: _normalize_array_numbers(item) for name, item in value.items()}
-    else:
-        return value
-
-
 class _TopLevelArrayReader:
     """Validate the root value without interrupting ijson's native items pipeline."""
 
@@ -689,38 +606,21 @@ def _array_records(source: Any) -> Iterator[Any]:
     with jsonl.open_stream(source) as stream:
         # Passing the stream directly keeps parsing and item construction in yajl2_c;
         # feeding parse() events into items() would rebuild every record in Python.
-        records = ijson.items(_TopLevelArrayReader(stream), "item", use_float=False)
-        for record in records:
-            yield _normalize_array_numbers(record)
+        yield from ijson.items(_TopLevelArrayReader(stream), "item", use_float=False)
 
 
-if _msgspec is not None:
-    _INPUT_DECODER = _msgspec.json.Decoder(float_hook=_Num)
+_INPUT_DECODER = msgspec.json.Decoder(float_hook=Decimal)
 
-    def _records(source: Any, on_error: Any, input_format: str) -> Iterator[Any]:
-        if input_format == "json":
-            yield from _array_records(source)
-            return
-        # msgspec decodes input lines ~2.6x faster than the stdlib parser and
-        # rejects NaN/Infinity natively. Floats become `_Num` (a Decimal subclass)
-        # while integers stay native `int`; both are handled by the number
-        # canonicalizers. Duplicate object keys follow JSON's last-wins semantics,
-        # matching the pure-Python fallback below.
-        yield from jsonl.load(source, cls=_INPUT_DECODER.decode, _on_error=on_error)
-else:
-    def _records(source: Any, on_error: Any, input_format: str) -> Iterator[Any]:
-        if input_format == "json":
-            yield from _array_records(source)
-            return
-        # No object_pairs_hook is installed, so duplicate object keys follow the
-        # stdlib parser's last-wins semantics, matching the msgspec path above.
-        yield from jsonl.load(
-            source,
-            parse_int=Decimal,
-            parse_float=Decimal,
-            parse_constant=_reject_constant,
-            _on_error=on_error,
-        )
+
+def _records(source: Any, on_error: Any, input_format: str) -> Iterator[Any]:
+    if input_format == "json":
+        yield from _array_records(source)
+        return
+    # msgspec decodes input lines ~2.6x faster than the stdlib parser and
+    # rejects NaN/Infinity natively. Non-integer numbers become Decimal while
+    # integers stay native `int`, preserving their parsed representation for
+    # content comparison. Duplicate object keys use last-wins semantics.
+    yield from jsonl.load(source, cls=_INPUT_DECODER.decode, _on_error=on_error)
 
 
 def _parallel_setting() -> Optional[bool]:
