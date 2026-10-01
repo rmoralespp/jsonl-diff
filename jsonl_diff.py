@@ -732,7 +732,8 @@ def _parallel_setting() -> Optional[bool]:
 
 
 def _cli_entry_point() -> bool:
-    """Return whether `__main__` is the jsonl-diff command line entry point.
+    """
+    Return whether `__main__` is the jsonl-diff command line entry point.
 
     Every start method except `fork` re-imports `__main__` in each worker, so
     an embedding application's module-level code would run once per side, and
@@ -767,7 +768,8 @@ def _multiprocessing_context() -> Any:
 
 
 def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") -> None:
-    """Index one side into a private database, or exit non-zero on failure.
+    """
+    Index one side into a private database, or exit non-zero on failure.
 
     Nothing is reported back: the parent detects failure from the exit status
     and re-raises by re-indexing sequentially, which reproduces the original
@@ -779,7 +781,7 @@ def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") ->
         result._open_connection(db_path)
         result._index(source, side)
         result._connection.commit()
-    except BaseException:  # noqa: BLE001 - the parent reproduces this
+    except BaseException:
         if result is not None:
             result.close()
         # Exit without unwinding so the traceback never reaches stderr; the
