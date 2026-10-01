@@ -68,7 +68,7 @@ Record order does not matter.
 * Configurable duplicate handling with counts and diagnostics: `error`, `first`, or `last`.
 * Exact **[RFC 6901](https://www.rfc-editor.org/info/rfc6901/)** JSON Pointer ignores.
 * Optional disk-backed observed-schema diff for fields, types, nullability, and requiredness.
-* Semantic number comparison using `Decimal`.
+* Value-canonical numeric identities with representation-sensitive record content.
 * Deterministic summaries and change iteration.
 * Original OLD/NEW physical line numbers.
 * Machine-readable JSONL change log with `--details` ([format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md)).
