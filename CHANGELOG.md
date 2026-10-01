@@ -9,7 +9,15 @@
 * **Changed:** Always index OLD and NEW in parallel worker processes. File-like
   inputs and stdin are staged in the temporary workspace, while `max_temp`
   continues to cover worker databases, stream copies, and merge-time usage.
-* **Changed:** Speed up array number normalization
+* **Changed:** Reduce parsing and schema-profiling type-check overhead while
+  preserving support for subclasses of JSON value types.
+* **Changed:** Make `msgspec` a required dependency and the single JSONL
+  decoder/content encoder, removing optional fallback behavior and the
+  recursive JSON-array number-normalization pass.
+* **Changed:** Require Python 3.10+, matching `msgspec 0.21.1`.
+* **Changed:** Content comparison now preserves parsed numeric representation;
+  for example, `1.0` and `1.00` are different. Numeric identity keys continue
+  to match by mathematical value.
 
 ## v0.1.5
 

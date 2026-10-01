@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/github/license/rmoralespp/jsonl-diff.svg" alt="License">
 </p>
 
-A lightweight, pure-Python tool for comparing large JSONL/NDJSON datasets and
+A lightweight tool for comparing large JSONL/NDJSON datasets and
 top-level JSON arrays **by record identity instead of line position**, without
 loading the complete inputs into memory.
 
@@ -24,19 +24,6 @@ It is useful for snapshots, ETL validation, migrations, exports, and CI checks.
 ```bash
 pip install jsonl-diff
 ```
-
-### Optional speedups
-
-For large datasets, install the optional [`msgspec`](https://github.com/msgspec/msgspec)
-accelerator (Python 3.10+), which uses a C parser and encoder for JSON decoding
-and record canonicalization, speeding up large diffs by roughly **2x**:
-
-```bash
-pip install "jsonl-diff[speedups]"
-```
-
-It is used automatically when available — no configuration or code changes. When
-`msgspec` is absent, the pure-Python path runs instead and produces identical results.
 
 ## Quick start
 
@@ -221,7 +208,8 @@ signature, result models, `Decimal` key semantics, and error hierarchy.
 * Duplicate identities fail by default; `--duplicates first`/`last` select one
   occurrence, report every discarded occurrence, and return exit code `1`.
 * Object property order is ignored; array order is significant.
-* Numbers are compared by mathematical value: `1`, `1.0`, and `1e0` are equal.
+* Numeric identity keys match by mathematical value, but record content
+  preserves parsed numeric representation: `1.0` and `1.00` are different.
 * Unicode strings are compared without normalization.
 * Changes are reported in deterministic identity order.
 
@@ -231,7 +219,7 @@ signature, result models, `Decimal` key semantics, and error hierarchy.
 See
 [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) for the full rules,
 including duplicate handling, ignore-pointer edge cases, `--where` evaluation
-order, and canonical number formatting.
+order, and numeric representation.
 
 ## Sources & compression
 
@@ -266,7 +254,7 @@ It is a **dataset reconciliation tool**, not a general-purpose visual JSON diff.
 
 ## Further reading
 
-* [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) — identity, duplicates, ignores, `--where`, canonical numbers, determinism.
+* [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) — identity, duplicates, ignores, `--where`, numeric representation, determinism.
 * [Disk-backed architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md) — SQLite index, `max_temp`, cleanup, sources and compression.
 * [Parallel indexing](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/parallel-indexing.md) — worker lifecycle, database merge, error recovery, and multiprocessing requirements.
 * [Details JSONL format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md) — machine-readable `--details` output schema.

@@ -17,9 +17,8 @@ filters records, compares content, and orders output. See the main
   semantics: the last occurrence of a repeated name is kept.
 - Top-level arrays, strings, numbers, booleans, and `null` are rejected.
 - Input errors identify `OLD` or `NEW` and include the physical line when available.
-- With the optional `msgspec` accelerator installed, integer literals longer than
-  CPython's `int_max_str_digits` limit (4300 digits by default) are rejected; the
-  pure-Python fallback accepts them.
+- Integer literals longer than CPython's `int_max_str_digits` limit (4300
+  digits by default) are rejected by the `msgspec` decoder.
 
 No normal summary or details output begins until both inputs pass complete
 input and duplicate validation.
@@ -51,7 +50,9 @@ is equivalent to `--key country,customer`.
 
 JSON types remain significant: `"1"` is different from `1`, and `true` is
 different from `1`. Object member order is ignored recursively, while array
-element order is significant.
+element order is significant. Numeric identity components are canonicalized by
+mathematical value, so differently represented but equal numbers identify the
+same record.
 
 Every normalized identity must be unique within OLD and within NEW by default.
 The first duplicate aborts the comparison; `DuplicateKeyError` reports the
@@ -151,8 +152,12 @@ Records with the same identity are compared after ignored members are removed:
 - Array order is significant.
 - Unicode strings are compared by code-point sequence; no Unicode
   normalization is applied.
-- Numbers are parsed as `Decimal` and compared by mathematical value.
-  `1`, `1.0`, and `1e0` are equal, and negative zero equals zero.
+- Integer tokens are parsed as `int`; tokens containing a fraction or exponent
+  are parsed as `Decimal`. Content comparison preserves the resulting numeric
+  representation, so `1.0` and `1.00`, `1000` and `1e3`, or `0` and `-0.0`
+  are different. Parsing may normalize equivalent lexical spellings, so this
+  is representation-sensitive comparison rather than byte-for-byte source
+  comparison.
 - Arbitrary-precision integers and decimal values are not rounded through
   binary floating point.
 
@@ -160,8 +165,9 @@ Canonical content is reduced to its length and a SHA-256 digest before being
 stored; content is considered equal when both match. A length+SHA-256 match
 is treated as proof of equality (the same trade-off relied upon by tools such
 as `git` and `rsync`); the full canonical bytes are not retained for
-comparison. Numbers are written using compact scientific notation; a large
-exponent does not expand into a large string of zeroes.
+comparison. `msgspec` writes `Decimal` values as JSON numbers and preserves
+their parsed scale/exponent representation without expanding a large exponent
+into a large string of zeroes.
 
 ## Determinism
 
