@@ -175,8 +175,7 @@ Results are streamed lazily through `changes()` rather than materialized in
 memory.
 
 Indexing runs in worker processes, so applications embedding `diff()` must
-guard their entry point with `if __name__ == "__main__":` — see
-[Parallel indexing](docs/parallel-indexing.md#application-entry-points).
+guard their entry point  — see [Parallel indexing](docs/parallel-indexing.md#application-entry-points).
 
 The main result models are:
 
@@ -275,7 +274,8 @@ uv run pytest
 uv run ruff check --quiet --output-format=concise .
 ```
 
-The test suite covers CLI behavior, identity/canonicalization, validation, details output, sources, compression, temporary limits, and cleanup.
+The test suite covers CLI behavior, identity/canonicalization, validation,
+details output, sources, compression, parallel indexing, and cleanup.
 
 ## License
 

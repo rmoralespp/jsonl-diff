@@ -2,8 +2,8 @@
 
 [← Back to README](../README.md)
 
-How `jsonl-diff` indexes records, bounds memory, limits temporary disk usage,
-and delegates source/compression handling.
+How `jsonl-diff` indexes records, bounds memory, uses temporary disk space, and
+delegates source/compression handling.
 
 ## SQLite index
 

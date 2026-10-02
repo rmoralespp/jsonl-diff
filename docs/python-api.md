@@ -35,7 +35,7 @@ The callable signature is:
 ```python
 from typing import Any, Optional, Sequence, Union
 
-from jsonl_diff import DiffResult, DuplicatePolicy
+from jsonl_diff import DiffResult, DuplicatePolicy, MissingKeyPolicy
 
 
 def diff(
@@ -46,6 +46,7 @@ def diff(
         ignore: Sequence[str] = (),
         where: Optional[str] = None,
         duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
+        missing_key: Union[str, MissingKeyPolicy] = MissingKeyPolicy.ERROR,
         schema_diff: bool = False,
         schema_ignore: Sequence[str] = (),
         format: str = "jsonl",

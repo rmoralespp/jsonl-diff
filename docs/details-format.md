@@ -13,7 +13,7 @@ For an OLD source containing identities `1` and `2`, and a NEW source
 containing changed identity `2` and added identity `3`, the file is:
 
 ```jsonl
-{"duplicates":"error","ignore":[],"key":["id"],"type":"meta","where":null}
+{"duplicates":"error","ignore":[],"key":["id"],"missing_key":"error","type":"meta","where":null}
 {"key":[1],"old_line":1,"op":"deleted","type":"change"}
 {"key":[2],"new_line":1,"old_line":2,"op":"modified","type":"change"}
 {"key":[3],"new_line":2,"op":"added","type":"change"}
@@ -25,9 +25,10 @@ containing changed identity `2` and added identity `3`, the file is:
 - **`meta`**: always first. `key` contains normalized identity-field names;
   `ignore` contains the configured ignore pointers; `where` contains the
   configured JMESPath expression, or `null` when `--where` was not used;
-  `duplicates` records the duplicate policy once for the whole report. With
-  `--schema-diff`, it also contains `schema_diff: true` and the normalized
-  `schema_ignore` pointers.
+  `duplicates` records the duplicate policy once for the whole report;
+  `missing_key` records how absent identity fields are handled. With
+  `--schema-diff`, the record also contains `schema_diff: true` and the
+  normalized `schema_ignore` pointers.
 - **`schema_change`**: emitted only with `--schema-diff`, ordered by RFC 6901
   path and operation before duplicate and record changes. `op` is
   `field_added`, `field_removed`, `types_changed`, `nullability_changed`, or
@@ -56,7 +57,7 @@ containing changed identity `2` and added identity `3`, the file is:
 Duplicate events follow `meta` and precede `change` events:
 
 ```jsonl
-{"duplicates":"first","ignore":[],"key":["id"],"type":"meta","where":null}
+{"duplicates":"first","ignore":[],"key":["id"],"missing_key":"error","type":"meta","where":null}
 {"content_equal":true,"discarded_line":2,"key":[1],"selected_line":1,"source":"OLD","type":"duplicate"}
 {"content_equal":false,"discarded_line":3,"key":[1],"selected_line":1,"source":"OLD","type":"duplicate"}
 {"added":0,"deleted":0,"equal":1,"modified":0,"new_duplicates":0,"old_duplicates":2,"type":"summary"}
@@ -65,7 +66,7 @@ Duplicate events follow `meta` and precede `change` events:
 Schema events precede duplicate and record changes:
 
 ```jsonl
-{"duplicates":"error","ignore":[],"key":["id"],"schema_diff":true,"schema_ignore":[],"type":"meta","where":null}
+{"duplicates":"error","ignore":[],"key":["id"],"missing_key":"error","schema_diff":true,"schema_ignore":[],"type":"meta","where":null}
 {"new":{"missing":0,"nulls":0,"parent_objects":2,"present":2,"types":{"string":2}},"old":{"missing":0,"nulls":0,"parent_objects":2,"present":2,"types":{"integer":2}},"op":"types_changed","path":"/age","type":"schema_change"}
 {"new":{"missing":0,"nulls":0,"parent_objects":2,"present":2,"types":{"string":2}},"op":"field_added","path":"/country","type":"schema_change"}
 {"added":0,"deleted":0,"equal":0,"modified":2,"new_duplicates":0,"old_duplicates":0,"schema":{"fields_added":1,"fields_removed":0,"nullability_changed":0,"requiredness_changed":0,"types_changed":1},"type":"summary"}
