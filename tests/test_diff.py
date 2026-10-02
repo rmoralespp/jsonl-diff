@@ -725,6 +725,14 @@ class TestInputValidation:
             with diff(old, new, key="id"):
                 pass
 
+    def test_missing_composite_identity_field_defaults_to_error(self, write_jsonl):
+        old = write_jsonl("old.jsonl", [{"a": 1, "value": "old"}])
+        new = write_jsonl("new.jsonl", [{"a": 1, "b": 2, "value": "new"}])
+
+        with pytest.raises(InputError, match="missing identity field 'b'"):
+            with diff(old, new, key=("a", "b")):
+                pass
+
     def test_missing_key_null_policy_treats_absent_field_as_null(self, write_jsonl):
         # Arrange: "b" is absent from OLD and explicitly null in NEW; with the
         # "null" policy both are treated as the same composite identity.
