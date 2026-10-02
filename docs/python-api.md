@@ -58,6 +58,14 @@ its context fully reads, indexes, and validates both sources before exposing
 the result. `DiffResult.changes()` is then a lazy iterator over the disk-backed
 result rather than a list held in memory.
 
+Entering the context indexes OLD and NEW in separate worker processes.
+Depending on how Python starts those processes, each can re-import your
+application's `__main__` module, so code that starts a comparison must sit
+behind an `if __name__ == "__main__":` guard; otherwise it may rerun
+module-level code or fail to start. The `python -m jsonl_diff` and installed
+`jsonl-diff` CLI entry points are already safe. See
+[Parallel indexing → Application entry points](parallel-indexing.md#application-entry-points).
+
 `format="jsonl"` (the default) reads one JSON object per line. Use
 `format="json"` for sources containing one top-level JSON array; its elements
 are parsed incrementally with `ijson`. Both formats support the same local,

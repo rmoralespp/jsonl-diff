@@ -174,6 +174,10 @@ with diff(
 Results are streamed lazily through `changes()` rather than materialized in
 memory.
 
+Indexing runs in worker processes, so applications embedding `diff()` must
+guard their entry point with `if __name__ == "__main__":` — see
+[Parallel indexing](docs/parallel-indexing.md#application-entry-points).
+
 The main result models are:
 
 ```python
