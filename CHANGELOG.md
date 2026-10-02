@@ -6,17 +6,13 @@
   keeping token parsing and item construction in the native yajl2_c pipeline
 * **Changed:** Parse top-level JSON arrays through `ijson`'s native `items()` pipeline, avoiding Python event bridging 
   while preserving incremental reads and exact numeric semantics.
-* **Changed:** Always index OLD and NEW in parallel worker processes. File-like
-  inputs and stdin are staged in the temporary workspace so workers and error
-  recovery can reopen them.
-* **Removed:** Remove the `--max-temp` CLI option and `max_temp` Python API
-  parameter, including workspace accounting and SQLite page limits.
+* **Changed:** Always index OLD and NEW in parallel worker processes. File-like inputs and stdin are staged in the temporary workspace so workers and error recovery can reopen them.
+* **Removed:** Breaking - Remove the `--max-temp` CLI option and `max_temp` Python API parameter, including workspace accounting and SQLite page limits.
 * **Changed:** Speed up array number normalization
 * **Changed:** Speed up identity extraction with precompiled C-level field lookups while preserving missing-field and null-key behavior.
-* **Changed:** Make `msgspec` a required dependency and the single JSONL
-  decoder and JSON encoder for identities, content, and details, removing optional fallback behavior and recursive Python canonicalization.
-* **Changed:** Require Python 3.10+, matching `msgspec 0.21.1`.
-* **Changed:** Identity and content comparison now preserve parsed numeric representation; for example, `1` and `1.0`, or `1.0` and `1.00`, are different.
+* **Changed:** Breaking - Make `msgspec` a required dependency and the single JSONL decoder and JSON encoder for identities, content, and details, removing optional fallback behavior and recursive Python canonicalization.
+* **Changed:** Breaking - Require Python 3.10+, matching `msgspec 0.21.1`.
+* **Changed:** Breaking - Identity and content comparison now preserve parsed numeric representation; for example, `1` and `1.0`, or `1.0` and `1.00`, are different.
 
 ## v0.1.5
 

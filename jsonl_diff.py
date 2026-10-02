@@ -12,8 +12,6 @@ import warnings
 from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
-from json.encoder import encode_basestring as _encode_basestring
-from json.encoder import encode_basestring_ascii as _encode_basestring_ascii
 from operator import itemgetter
 from typing import Any, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
