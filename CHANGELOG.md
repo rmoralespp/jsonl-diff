@@ -8,6 +8,13 @@
   while preserving incremental reads and exact numeric semantics.
 * **Changed:** Add parallel indexing for large local inputs
 * **Changed:** Speed up array number normalization
+* **Changed:** Make `msgspec` a required dependency and the single JSONL
+  decoder and JSON encoder for identities, content, and details, removing
+  optional fallback behavior and recursive Python canonicalization.
+* **Changed:** Require Python 3.10+, matching `msgspec 0.21.1`.
+* **Changed:** Identity and content comparison now preserve parsed numeric
+  representation; for example, `1` and `1.0`, or `1.0` and `1.00`, are
+  different.
 
 ## v0.1.5
 

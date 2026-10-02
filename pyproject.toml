@@ -5,17 +5,15 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "jsonl-diff"
 version = "0.1.5"
-description = "A lightweight, pure-Python tool for comparing large JSONL/NDJSON datasets without loading them entirely into memory."
+description = "A lightweight tool for comparing large JSONL/NDJSON datasets without loading them entirely into memory."
 readme = "README.md"
 license = { file = "LICENSE" }
 keywords = ["jsonlines", "ndjson", "jsonl", "json", "gzip", "bzip2", "xz", "zst", "utilities", "serialization", "deserialization", "diff", "json-diff", "cli"]
 authors = [{ name = "rmoralespp", email = "rmoralespp@gmail.com" }]
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -32,11 +30,7 @@ dependencies = [
     "ijson>=3.2",
     "py-jsonl==1.5.3",
     "jmespath>=1.0.0",
-]
-
-[project.optional-dependencies]
-speedups = [
-    "msgspec>=0.18; python_version >= '3.10'",
+    "msgspec>=0.21.1",
 ]
 
 [project.scripts]
@@ -54,7 +48,6 @@ test = [
     "coverage",
     "pytest-cov",
     "setuptools; python_version >= '3.12'",
-    "msgspec>=0.18; python_version >= '3.10'",
 ]
 lint = [
     "ruff",

@@ -16,6 +16,11 @@ tolerates a collision, a second table stores the discarded occurrence's
 identity, physical line, canonical length, and digest. SQL joins calculate the
 summary, and ordered SQLite cursors drive lazy change and duplicate iteration.
 
+`msgspec` produces both the stored identity bytes and the canonical content
+bytes with recursively sorted object keys. Numeric scale and exponent
+representation are preserved, so representationally different numeric
+identities occupy different index entries.
+
 This architecture bounds memory by the records currently being processed and
 database buffers; it does not keep the complete decoded inputs or all changes
 in RAM. It does require temporary disk space. The identity, line, length, and

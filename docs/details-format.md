@@ -45,7 +45,8 @@ containing changed identity `2` and added identity `3`, the file is:
   `new_line` is present for additions and modifications. Equal records are not
   emitted. `key` contains the identity values as JSON values, including
   objects and arrays; object member order is canonicalized and array order is
-  preserved.
+  preserved. Numeric keys retain their parsed representation and use
+  `msgspec` JSON notation, including uppercase `E` for exponents.
 - **`summary`**: always last after a successful write, with the four
   reconciliation totals plus `old_duplicates` and `new_duplicates`. Duplicate
   totals count additional occurrences, so an identity appearing three times
