@@ -468,9 +468,9 @@ class TestDetailsNumberOutput:
     @pytest.mark.parametrize(
         "value,expected",
         [
-            ("1e3", "1e+3"),
-            ("1e50000000", "1e+50000000"),
-            ("1e-50000000", "1e-50000000"),
+            ("1e3", "1E+3"),
+            ("1e50000000", "1E+50000000"),
+            ("1e-50000000", "1E-50000000"),
         ],
     )
     def test_numeric_key_uses_compact_decimal_notation(
