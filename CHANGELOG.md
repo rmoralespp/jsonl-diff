@@ -2,15 +2,17 @@
 
 ## Unreleased
 
-* **Changed:** Changed: Speed up incremental parsing of top-level JSON arrays by passing streams directly to ijson.items(),
-  keeping token parsing and item construction in the native yajl2_c pipeline while preserving incremental reads and exact numeric semantics.
-* **Changed:** Add parallel indexing for large local inputs
+* **Changed:** Speed up incremental JSON array parsing: pass top-level JSON array streams directly to ijson.items(), 
+  keeping token parsing and item construction in the native yajl2_c pipeline
+* **Changed:** Parse top-level JSON arrays through `ijson`'s native `items()` pipeline, avoiding Python event bridging 
+  while preserving incremental reads and exact numeric semantics.
+* **Changed:** Always index OLD and NEW in parallel worker processes. File-like inputs and stdin are staged in the temporary workspace so workers and error recovery can reopen them.
+* **Removed:** Breaking - Remove the `--max-temp` CLI option and `max_temp` Python API parameter, including workspace accounting and SQLite page limits.
 * **Changed:** Speed up array number normalization
 * **Changed:** Speed up identity extraction with precompiled C-level field lookups while preserving missing-field and null-key behavior.
-* **Changed:** Make `msgspec` a required dependency and the single JSONL
-  decoder and JSON encoder for identities, content, and details, removing optional fallback behavior and recursive Python canonicalization.
-* **Changed:** Require Python 3.10+, matching `msgspec 0.21.1`.
-* **Changed:** Identity and content comparison now preserve parsed numeric representation; for example, `1` and `1.0`, or `1.0` and `1.00`, are different.
+* **Changed:** Breaking - Make `msgspec` a required dependency and the single JSONL decoder and JSON encoder for identities, content, and details, removing optional fallback behavior and recursive Python canonicalization.
+* **Changed:** Breaking - Require Python 3.10+, matching `msgspec 0.21.1`.
+* **Changed:** Breaking - Identity and content comparison now preserve parsed numeric representation; for example, `1` and `1.0`, or `1.0` and `1.00`, are different.
 
 ## v0.1.5
 
@@ -35,7 +37,7 @@
 * **Changed:** Speed up record canonicalization ~4x on large datasets with faster string escaping, serialization, 
    and integral-value hashing. Comparison results and identity/`--details` key notation are unchanged.
 * **Changed:** Speed up the disk-backed SQLite index phase with batched inserts, optimized change-summary queries, 
-    tuned connection settings (~4x faster reads). Duplicate detection, size limits, and results are unchanged.
+    tuned connection settings (~4x faster reads). Duplicate detection and results are unchanged.
 * **Changed:** Duplicate object property names now follow JSON last-wins semantics instead of raising an error, in 
     both `msgspec` and pure-Python parsers.
 
@@ -50,11 +52,9 @@
   physical lines and canonical-content equality.
 - **Changed:** Tolerated duplicates now produce CLI exit code `1`, even when
   the selected OLD and NEW records otherwise compare equal.
-- **Docs:** Clarify that `max_temp` is a best-effort budget for the `jsonl-diff` workspace, not a global limit for all temporary storage used by the process.
 - **Docs:** Clarify that composite identities may contain `null` components, but uniqueness is always enforced on the complete identity tuple.
 - **Changed:** Internal JSON value types now distinguish parser-produced `Decimal` numbers from native Python `int`/`float` values accepted only by numeric canonicalization helpers.
 - **Changed:** Compile `--where` expressions once and reuse them during indexing.
-- **Changed:** Run `--max-temp` size checks periodically, improving large-input indexing speed by ~8x while retaining limits.
 - **Fixed:** Trim whitespace from `--key` names and reject empty values correctly.
 - **Fixed:** Links to documentation files referenced from the README file
 - **Fixed:** Details JSONL writes ordinary counters, line numbers, keys, and field values without forcing scientific notation.

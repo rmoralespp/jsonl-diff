@@ -9,8 +9,7 @@ import threading
 
 import pytest
 
-import jsonl_diff
-from jsonl_diff import ConfigurationError, InputError, ResourceError, Summary, diff
+from jsonl_diff import InputError, Summary, diff
 
 
 def _write_gzip(path, content):
@@ -112,6 +111,16 @@ class TestStreamSources:
 
         # Assert
         assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
+
+    def test_invalid_file_like_source_reports_input_error(self):
+        # Arrange
+        old = io.BytesIO(b'{"id":1')
+        new = io.BytesIO(b'{"id":1}\n')
+
+        # Act / Assert
+        with pytest.raises(InputError):
+            with diff(old, new, key="id"):
+                pass
 
 
 class TestJsonArraySources:
@@ -245,64 +254,7 @@ class TestHttpSources:
         assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
 
 
-class TestTemporaryStorage:
-    @pytest.mark.parametrize("limit", [0, -1, "invalid"])
-    def test_invalid_max_temp_is_rejected(self, write_jsonl, limit):
-        # Arrange
-        old = write_jsonl("old.jsonl", [])
-        new = write_jsonl("new.jsonl", [])
-
-        # Act / Assert
-        with pytest.raises(ConfigurationError):
-            diff(old, new, key="id", max_temp=limit)
-
-    def test_exceeded_max_temp_raises_resource_error_and_cleans_workspace(
-        self,
-        write_jsonl,
-    ):
-        # Arrange
-        payload = "x" * 1024
-        old = write_jsonl(
-            "old.jsonl",
-            [{"id": index, "payload": payload} for index in range(300)],
-        )
-        new = write_jsonl("new.jsonl", [])
-
-        # Act
-        with pytest.raises(ResourceError):
-            with diff(old, new, key="id", max_temp=16 * 1024):
-                pass
-
-    def test_size_is_checked_periodically_rather_than_per_record(
-        self,
-        write_jsonl,
-        monkeypatch,
-    ):
-        # Arrange: enough records to span several check intervals, but well
-        # under max_temp, so no ResourceError interferes with the count.
-        interval = jsonl_diff._SIZE_CHECK_INTERVAL
-        record_count = interval * 2
-        old = write_jsonl("old.jsonl", [{"id": index} for index in range(record_count)])
-        new = write_jsonl("new.jsonl", [])
-        calls = []
-        original_check_size = jsonl_diff.DiffResult._check_size
-
-        def counting_check_size(self):
-            calls.append(1)
-            return original_check_size(self)
-
-        monkeypatch.setattr(jsonl_diff.DiffResult, "_check_size", counting_check_size)
-
-        # Act
-        with diff(old, new, key="id", max_temp=10 * 1024 * 1024):
-            pass
-
-        # Assert: two periodic checks plus a final check per side (OLD), and
-        # just the final check for the empty NEW side; far fewer than
-        # `record_count` calls.
-        assert len(calls) == (record_count // interval + 1) + 1
-        assert len(calls) < record_count
-
+class TestWorkerErrors:
     def test_input_error_is_reported(self, write_jsonl):
         # Arrange
         old = write_jsonl("old.jsonl", ['{"id":1', '{"id":2}'])

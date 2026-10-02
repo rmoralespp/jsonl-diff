@@ -17,7 +17,6 @@ with diff(
         ignore=("/updated_at",),
         where="country == `\"ES\"`",
         duplicates="error",
-        max_temp=2_000_000_000,
         schema_diff=True,
         schema_ignore=("/metadata",),
         format="jsonl",
@@ -47,7 +46,6 @@ def diff(
         ignore: Sequence[str] = (),
         where: Optional[str] = None,
         duplicates: Union[str, DuplicatePolicy] = DuplicatePolicy.ERROR,
-        max_temp: Optional[int] = None,
         schema_diff: bool = False,
         schema_ignore: Sequence[str] = (),
         format: str = "jsonl",
@@ -59,6 +57,14 @@ def diff(
 its context fully reads, indexes, and validates both sources before exposing
 the result. `DiffResult.changes()` is then a lazy iterator over the disk-backed
 result rather than a list held in memory.
+
+Entering the context indexes OLD and NEW in separate worker processes.
+Depending on how Python starts those processes, each can re-import your
+application's `__main__` module, so code that starts a comparison must sit
+behind an `if __name__ == "__main__":` guard; otherwise it may rerun
+module-level code or fail to start. The `python -m jsonl_diff` and installed
+`jsonl-diff` CLI entry points are already safe. See
+[Parallel indexing → Application entry points](parallel-indexing.md#application-entry-points).
 
 `format="jsonl"` (the default) reads one JSON object per line. Use
 `format="json"` for sources containing one top-level JSON array; its elements
@@ -168,10 +174,10 @@ writes identity values as JSON values, including arbitrary-precision numbers.
 
 The public error hierarchy starts with `JsonlDiffError`:
 
-- `ConfigurationError`: invalid keys, ignore pointers, schema options, or `max_temp`;
+- `ConfigurationError`: invalid keys, ignore pointers, or schema options;
 - `InputError`: an invalid source or record; exposes `source` and optional `line`;
 - `DuplicateKeyError`: an `InputError` with `key` and the first/repeated physical lines in `lines`;
-- `ResourceError`: the temporary index cannot be created, written, or kept within its configured limit.
+- `ResourceError`: the temporary index cannot be created or written.
 
 Failures during `diff()` clean up the workspace before the exception is
 raised.

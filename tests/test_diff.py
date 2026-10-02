@@ -992,7 +992,6 @@ class TestSchemaDiff:
             (),
             None,
             DuplicatePolicy.ERROR,
-            None,
             expression,
         )
 
