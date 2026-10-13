@@ -24,11 +24,6 @@ deterministic, and disk-backed.
 fields. Record order does not matter. It reports what is equal, added, deleted,
 modified, or duplicated while preserving the original OLD and NEW locations.
 
-```text
-                     identity
-OLD ── parse ── index ───┬─── compare ── summary / changes
-NEW ── parse ── index ───┘
-```
 
 ## Why jsonl-diff
 
