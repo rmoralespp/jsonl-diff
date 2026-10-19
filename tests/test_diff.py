@@ -1274,6 +1274,44 @@ class TestChanges:
             (ChangeOperation.ADDED, (Decimal("3"),)),
         ]
 
+    @pytest.mark.parametrize(
+        "operation,expected_key",
+        [
+            (ChangeOperation.DELETED, (Decimal("1"),)),
+            (ChangeOperation.MODIFIED, (Decimal("2"),)),
+        ],
+    )
+    def test_changes_filtered_by_operation_return_only_that_operation(
+        self, write_jsonl, operation, expected_key,
+    ):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}, {"id": 2}])
+        new = write_jsonl("new.jsonl", [{"id": 2, "changed": True}, {"id": 3}])
+
+        # Act
+        with diff(old, new, key="id") as result:
+            changes = list(result.changes(operation))
+
+        # Assert
+        assert [(change.operation, change.key) for change in changes] == [(operation, expected_key)]
+
+    def test_changes_interleave_operations_in_identity_order(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 4}, {"id": 2, "value": "old"}, {"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 3}, {"id": 2, "value": "new"}, {"id": 5}, {"id": 1}])
+
+        # Act
+        with diff(old, new, key="id") as result:
+            changes = [(change.key, change.operation) for change in result.changes()]
+
+        # Assert
+        assert changes == [
+            ((Decimal("2"),), ChangeOperation.MODIFIED),
+            ((Decimal("3"),), ChangeOperation.ADDED),
+            ((Decimal("4"),), ChangeOperation.DELETED),
+            ((Decimal("5"),), ChangeOperation.ADDED),
+        ]
+
     def test_changes_have_stable_canonical_order(self, write_jsonl):
         # Arrange
         records = [
