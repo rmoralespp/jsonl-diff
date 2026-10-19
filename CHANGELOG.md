@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* **Changed:** Resolve `DiffResult.changes()` in SQLite so only changed identities reach Python: unfiltered iteration
+  scans OLD once with a `LEFT JOIN`, and operation filters run a dedicated query (~1.5x faster unfiltered, ~3x faster
+  filtered on 1M records). Order and output are unchanged.
 * **Changed:** Measure coverage inside parallel indexing worker processes (`concurrency = ["multiprocessing"]`, `patch = ["subprocess"]`).
 * **Added:** Tests for result lifecycle, cleanup warnings, resource errors, stream staging, ignore paths, `--where` errors,
   schema flush boundaries and CLI edge cases, raising coverage from 82% to 98%.

@@ -465,6 +465,46 @@ def _compile_where(expression: str) -> Any:
         raise ConfigurationError("invalid --where expression {!r}: {}".format(expression, error)) from error
 
 
+_ADDED_QUERY = """
+    SELECT n.identity, NULL, n.line
+    FROM records AS n
+    WHERE n.side = 1 AND NOT EXISTS (
+        SELECT 1 FROM records AS o WHERE o.side = 0 AND o.identity = n.identity
+    )
+"""
+_DELETED_QUERY = """
+    SELECT o.identity, o.line, NULL
+    FROM records AS o
+    WHERE o.side = 0 AND NOT EXISTS (
+        SELECT 1 FROM records AS n WHERE n.side = 1 AND n.identity = o.identity
+    )
+"""
+_MODIFIED_QUERY = """
+    SELECT o.identity, o.line, n.line
+    FROM records AS o
+    JOIN records AS n
+      ON o.side = 0 AND n.side = 1 AND o.identity = n.identity
+    WHERE o.length <> n.length OR o.digest <> n.digest
+"""
+# Unfiltered iteration resolves deleted and modified identities in a single
+# pass over OLD instead of scanning it once per operation.
+_DELETED_OR_MODIFIED_QUERY = """
+    SELECT o.identity, o.line, n.line
+    FROM records AS o
+    LEFT JOIN records AS n
+      ON n.side = 1 AND n.identity = o.identity
+    WHERE o.side = 0 AND (n.identity IS NULL OR o.length <> n.length OR o.digest <> n.digest)
+"""
+# Each query yields (identity, old_line, new_line); ordering by the canonical
+# identity BLOB (bytewise) keeps iteration deterministic.
+_CHANGE_QUERIES = {
+    None: _DELETED_OR_MODIFIED_QUERY + " UNION ALL " + _ADDED_QUERY + " ORDER BY 1",
+    ChangeOperation.ADDED: _ADDED_QUERY + " ORDER BY 1",
+    ChangeOperation.DELETED: _DELETED_QUERY + " ORDER BY 1",
+    ChangeOperation.MODIFIED: _MODIFIED_QUERY + " ORDER BY 1",
+}
+
+
 class _TopLevelArrayReader:
     """Validate the root value without interrupting ijson's native items pipeline."""
 
@@ -689,44 +729,17 @@ class DiffResult:
         if self._connection is None:
             raise RuntimeError("the diff result is closed")
         requested = None if operation is None else ChangeOperation(operation)
-        query = """
-            SELECT identity, line, length, digest
-            FROM records
-            WHERE side = ?
-            ORDER BY identity
-        """
-        old_records = iter(self._connection.execute(query, (0,)))
-        new_records = iter(self._connection.execute(query, (1,)))
-        old_record = next(old_records, None)
-        new_record = next(new_records, None)
-        while old_record is not None or new_record is not None:
-            comparison = (
-                1
-                if old_record is None
-                else -1
-                if new_record is None
-                else (old_record[0] > new_record[0]) - (old_record[0] < new_record[0])
-            )
-
-            if comparison < 0:
-                change = self._change(ChangeOperation.DELETED, old_record, None)
-                old_record = next(old_records, None)
-            elif comparison > 0:
-                change = self._change(ChangeOperation.ADDED, None, new_record)
-                new_record = next(new_records, None)
+        # SQLite resolves identity matching over the primary key, so only
+        # changed rows reach Python.
+        rows = self._connection.execute(_CHANGE_QUERIES[requested])
+        for identity, old_line, new_line in rows:
+            if old_line is None:
+                change_operation = ChangeOperation.ADDED
+            elif new_line is None:
+                change_operation = ChangeOperation.DELETED
             else:
-                old_signature = old_record[2:]
-                new_signature = new_record[2:]
-                change = (
-                    None
-                    if old_signature == new_signature
-                    else self._change(ChangeOperation.MODIFIED, old_record, new_record)
-                )
-                old_record = next(old_records, None)
-                new_record = next(new_records, None)
-
-            if change is not None and (requested is None or change.operation == requested):
-                yield change
+                change_operation = ChangeOperation.MODIFIED
+            yield self._change(change_operation, identity, old_line, new_line)
 
     def schema_changes(
         self,
@@ -843,16 +856,14 @@ class DiffResult:
                 bool(content_equal),
             )
 
+    @staticmethod
     def _change(
-        self,
         operation: ChangeOperation,
-        old_record: Optional[Tuple[Any, ...]],
-        new_record: Optional[Tuple[Any, ...]],
+        identity: bytes,
+        old_line: Optional[int],
+        new_line: Optional[int],
     ) -> Change:
-        record = old_record or new_record
-        key = tuple(_decode_json(record[0].decode(utf8)))
-        old_line = None if old_record is None else old_record[1]
-        new_line = None if new_record is None else new_record[1]
+        key = tuple(_decode_json(identity.decode(utf8)))
         return Change(
             operation,
             key,
