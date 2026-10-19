@@ -1182,6 +1182,32 @@ class TestSchemaDiff:
         }
         assert change.new.type_counts == {"string": 3}
 
+    def test_same_field_name_under_different_parents_is_profiled_separately(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "a": {"x": 1}, "b": {"x": 1}, "a/x": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "a": {"x": "1"}, "b": {"x": 1}, "a/x": 1}])
+
+        # Act
+        with diff(old, new, key="id", schema_diff=True) as result:
+            changes = [(change.operation, change.path) for change in result.schema_changes()]
+
+        # Assert
+        assert changes == [(SchemaChangeOperation.TYPES_CHANGED, "/a/x")]
+
+    def test_schema_types_for_json_array_input(self, tmp_path):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1,"meta":{"value":2}},{"id":2,"meta":{"value":2.5}}]', encoding="utf-8")
+        new.write_text('[{"id":1,"meta":{"value":"2"}},{"id":2,"meta":{"value":"2.5"}}]', encoding="utf-8")
+
+        # Act
+        with diff(old, new, key="id", schema_diff=True, format="json") as result:
+            change = next(result.schema_changes(SchemaChangeOperation.TYPES_CHANGED))
+
+        # Assert
+        assert (change.path, change.old.type_counts) == ("/meta/value", {"integer": 1, "number": 1})
+
     def test_schema_profile_only_includes_records_selected_by_where(self, write_jsonl):
         # Arrange
         old = write_jsonl(

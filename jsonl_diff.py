@@ -39,6 +39,15 @@ _SCHEMA_TYPE_INDEXES = {
     "object": 7,
     "array": 8,
 }
+# Exact-class lookup for the common parsed types; Decimal, float and subclasses
+# fall back to `_schema_type`, which also decides integer versus number.
+_SCHEMA_TYPE_INDEX_BY_CLASS = {
+    bool: _SCHEMA_TYPE_INDEXES["boolean"],
+    int: _SCHEMA_TYPE_INDEXES["integer"],
+    str: _SCHEMA_TYPE_INDEXES["string"],
+    dict: _SCHEMA_TYPE_INDEXES["object"],
+    list: _SCHEMA_TYPE_INDEXES["array"],
+}
 
 _CANONICAL_ENCODER = msgspec.json.Encoder(decimal_format="number", order="sorted")
 _INPUT_DECODER = msgspec.json.Decoder(float_hook=Decimal)
@@ -349,31 +358,41 @@ def _schema_type(value: Any) -> str:
 def _profile_schema(
     record: Dict[str, Any],
     ignore_tree: Dict[str, Any],
-    fields: Dict[str, Any],
+    fields: Dict[Tuple[str, str], Any],
     objects: Dict[str, int],
 ):
+    """
+    Accumulate observed field counts for one record.
+
+    Fields are keyed by ``(parent_path, name)`` so JSON Pointers are built once
+    per distinct field at flush time instead of once per occurrence.
+    """
+    object_index = _SCHEMA_TYPE_INDEXES["object"]
     stack = [("", record, ignore_tree)]
     while stack:
         path, value, tree = stack.pop()
         objects[path] = objects.get(path, 0) + 1
         for name, item in value.items():
-            child_tree = tree.get(name)
-            if child_tree is not None and _MISSING in child_tree:
-                continue
-            if child_tree and isinstance(item, list):
-                raise ValueError("schema ignore paths may not traverse arrays")
-            child_path = _pointer_child(path, name)
-            counts = fields.get(child_path)
+            child_tree = tree.get(name) if tree else None
+            if child_tree is not None:
+                if _MISSING in child_tree:
+                    continue
+                if isinstance(item, list):
+                    raise ValueError("schema ignore paths may not traverse arrays")
+            counts = fields.get((path, name))
             if counts is None:
                 counts = [path, 0, 0, 0, 0, 0, 0, 0, 0]
-                fields[child_path] = counts
+                fields[(path, name)] = counts
             counts[1] += 1
             if item is None:
                 counts[2] += 1
-            else:
-                counts[_SCHEMA_TYPE_INDEXES[_schema_type(item)]] += 1
-            if isinstance(item, dict):
-                stack.append((child_path, item, child_tree or {}))
+                continue
+            index = _SCHEMA_TYPE_INDEX_BY_CLASS.get(type(item))
+            if index is None:
+                index = _SCHEMA_TYPE_INDEXES[_schema_type(item)]
+            counts[index] += 1
+            if index == object_index:
+                stack.append((_pointer_child(path, name), item, child_tree or {}))
 
 
 def _parse_pointer(pointer: str) -> Tuple[str, ...]:
@@ -1050,7 +1069,7 @@ class DiffResult:
     def _flush_schema_profile(
         cursor: sqlite3.Cursor,
         side: int,
-        fields: Dict[str, Any],
+        fields: Dict[Tuple[str, str], Any],
         objects: Dict[str, int],
     ):
         if objects:
@@ -1078,8 +1097,8 @@ class DiffResult:
                     arrays = schema_fields.arrays + excluded.arrays
                 """,
                 (
-                    (side, path, counts[0], *counts[1:])
-                    for path, counts in fields.items()
+                    (side, _pointer_child(parent, name), parent, *counts[1:])
+                    for (parent, name), counts in fields.items()
                 ),
             )
             fields.clear()
