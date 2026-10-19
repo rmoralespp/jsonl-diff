@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Changed:** Measure coverage inside parallel indexing worker processes (`concurrency = ["multiprocessing"]`, `patch = ["subprocess"]`).
+* **Added:** Tests for result lifecycle, cleanup warnings, resource errors, stream staging, ignore paths, `--where` errors,
+  schema flush boundaries and CLI edge cases, raising coverage from 82% to 98%.
+
 ## v0.2.1
 
 * **Changed:** Speed up incremental JSON array parsing: pass top-level JSON array streams directly to ijson.items(), 

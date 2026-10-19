@@ -64,6 +64,9 @@ Documentation = "https://rmoralespp.github.io/jsonl-diff/"
 [tool.coverage.run]
 branch = true
 omit = ["tests/*"]
+# Indexing runs in worker processes; measure them too.
+concurrency = ["multiprocessing"]
+patch = ["subprocess"]
 
 [tool.coverage.report]
 skip_empty = true

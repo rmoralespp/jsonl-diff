@@ -326,8 +326,10 @@ editor. It intentionally does not provide:
 
 ```bash
 uv sync --group test --group lint
-uv run pytest
+# Lint
 uv run ruff check --quiet --output-format=concise .
+# Tests
+uv run python -Wd -m pytest tests/ --cov
 ```
 
 The suite covers CLI behavior, identity and canonicalization, validation,
