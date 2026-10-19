@@ -181,6 +181,26 @@ The stream starts with comparison metadata, emits only changed identities in
 deterministic order, and finishes with the complete summary. See the
 [details format](docs/details-format.md) for duplicate and schema events.
 
+**Get every report from a single indexing pass**
+
+Indexing dominates the cost of a comparison, and each invocation indexes both
+inputs again. Instead of running separate summary, schema, and details
+commands, request them together and query the details file afterwards:
+
+```bash
+jsonl-diff old.jsonl new.jsonl \
+  --key id \
+  --schema-diff \
+  --details report.jsonl
+
+# Later queries read report.jsonl instead of re-indexing the inputs.
+jq -c 'select(.type == "schema_change")' report.jsonl
+jq -c 'select(.type == "change" and .op == "modified")' report.jsonl
+jq -c 'select(.type == "summary")' report.jsonl
+```
+
+See [Details format → Querying a report](docs/details-format.md#querying-a-report).
+
 **Read compressed inputs**
 
 ```bash
