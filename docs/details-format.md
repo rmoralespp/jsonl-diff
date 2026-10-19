@@ -72,6 +72,39 @@ Schema events precede duplicate and record changes:
 {"added":0,"deleted":0,"equal":0,"modified":2,"new_duplicates":0,"old_duplicates":0,"schema":{"fields_added":1,"fields_removed":0,"nullability_changed":0,"requiredness_changed":0,"types_changed":1},"type":"summary"}
 ```
 
+## Querying a report
+
+Every invocation indexes both inputs, and indexing dominates the cost of a
+comparison. Since a details file already contains the summary, schema changes
+(with `--schema-diff`), duplicates, and record changes, one run can replace
+several:
+
+```bash
+jsonl-diff old.jsonl new.jsonl --key id --schema-diff --details report.jsonl --quiet
+```
+
+The report is plain JSONL, so any line-oriented tool can query it without
+re-indexing the inputs. For example, with `jq`:
+
+```bash
+# Summary totals, including the nested schema totals
+jq -c 'select(.type == "summary")' report.jsonl
+
+# Observed-schema changes
+jq -c 'select(.type == "schema_change")' report.jsonl
+
+# Identities of modified records
+jq -c 'select(.type == "change" and .op == "modified") | .key' report.jsonl
+
+# Number of added records
+jq -s 'map(select(.type == "change" and .op == "added")) | length' report.jsonl
+```
+
+Options that change which records are compared or how they are compared
+(`--key`, `--ignore`, `--where`, `--duplicates`, `--missing-key`,
+`--schema-ignore`, `--format`) produce a different report and require a new
+run; the `meta` record states the configuration a report was produced with.
+
 ## Notes
 
 The normal stdout summary is unchanged when `--details` is used, unless

@@ -77,6 +77,12 @@ resources and removes its private workspace on exit. A result cannot be entered
 more than once. Its summary becomes available after entering and remains
 available after closing; iterating changes requires the context to remain open.
 
+All queries inside one context reuse the same index: `summary`,
+`changes()`, `schema_changes()`, and `duplicates()` can be called any number of
+times, with or without operation filters, without reading the sources again.
+Prefer one context over several `diff()` calls on the same inputs, since each
+new context indexes both sources from scratch.
+
 ## Result models
 
 `result.summary` is an immutable `Summary`:

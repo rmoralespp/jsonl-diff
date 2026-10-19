@@ -7,6 +7,8 @@
   filtered on 1M records). Order and output are unchanged.
 * **Changed:** Speed up `--schema-diff` profiling: classify value types with an exact-class lookup and key fields by
   `(parent, name)`, building JSON Pointers once per distinct field at flush time (~37% less schema overhead on indexing).
+* **Added:** Document running summary, schema diff, and details in a single indexing pass and querying the details
+  report afterwards (README, details format, Python API).
 * **Changed:** Measure coverage inside parallel indexing worker processes (`concurrency = ["multiprocessing"]`, `patch = ["subprocess"]`).
 * **Added:** Tests for result lifecycle, cleanup warnings, resource errors, stream staging, ignore paths, `--where` errors,
   schema flush boundaries and CLI edge cases, raising coverage from 82% to 98%.
