@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Added:** Support Python 3.15: add the classifier and test it in CI (lint and coverage now run on 3.15).
+* **Changed:** Require the latest runtime dependencies: `ijson>=3.6.0`, `py-jsonl==1.5.4`, `jmespath>=1.1.0` and
+  `msgspec>=0.22.0`. `ijson 3.6.0` and `msgspec 0.22.0` are the first releases with Python 3.15 wheels, so the native
+  `yajl2_c` backend is used there instead of the slower pure-Python fallback.
 * **Fixed:** Reject `--details FILE` with exit code `3` when it refers to the same file as OLD or NEW, preventing the 
     report from overwriting an input.
 * **Fixed:** Terminate indexing worker processes when parallel indexing is interrupted (e.g. `KeyboardInterrupt`) or a

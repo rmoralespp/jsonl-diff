@@ -81,11 +81,11 @@ array elements incrementally with `ijson`.
 | gzip (`.gz`)       |       Yes        |               Yes               |
 | bzip2 (`.bz2`)     |       Yes        |               Yes               |
 | xz (`.xz`)         |       Yes        |               Yes               |
-| Zstandard (`.zst`) | Python 3.14 only |        Python 3.14 only         |
+| Zstandard (`.zst`) |   Python 3.14+   |          Python 3.14+           |
 | ZIP archive        |        No        |               No                |
 
-Zstandard availability follows `py-jsonl` and its use of Python 3.14's
-standard-library zstd support; it is not supported by this project on earlier
+Zstandard availability follows `py-jsonl` and its use of the standard-library
+zstd support added in Python 3.14; it is not supported by this project on earlier
 Python versions. Compression and HTTP transfer boundaries do not affect the
 reported decoded JSONL line numbers. For `--format json`, the corresponding
 locations are one-based array-element ordinals rather than physical lines.

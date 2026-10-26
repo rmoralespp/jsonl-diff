@@ -2,8 +2,6 @@
 
 # jsonl-diff
 
-### A lightweight Python CLI and library for identity-aware JSON diffs
-
 Compare large JSONL, NDJSON, and top-level JSON arrays by record identity—not
 by line position—without loading either complete dataset into memory. Strict,
 deterministic, and disk-backed.
@@ -302,16 +300,16 @@ ignore-pointer edge cases, filter order, schema inference, and numeric behavior.
 
 ## Sources and compression
 
-| Source             |     CLI     | Python API  |
-|--------------------|:-----------:|:-----------:|
-| Local path         |     Yes     |     Yes     |
-| HTTP/HTTPS URL     |     Yes     |     Yes     |
-| File-like object   |     No      |     Yes     |
-| gzip (`.gz`)       |     Yes     |     Yes     |
-| bzip2 (`.bz2`)     |     Yes     |     Yes     |
-| xz (`.xz`)         |     Yes     |     Yes     |
-| Zstandard (`.zst`) | Python 3.14 | Python 3.14 |
-| ZIP archive        |     No      |     No      |
+| Source             |     CLI      |  Python API  |
+|--------------------|:------------:|:------------:|
+| Local path         |     Yes      |     Yes      |
+| HTTP/HTTPS URL     |     Yes      |     Yes      |
+| File-like object   |      No      |     Yes      |
+| gzip (`.gz`)       |     Yes      |     Yes      |
+| bzip2 (`.bz2`)     |     Yes      |     Yes      |
+| xz (`.xz`)         |     Yes      |     Yes      |
+| Zstandard (`.zst`) | Python 3.14+ | Python 3.14+ |
+| ZIP archive        |      No      |      No      |
 
 Source opening and decompression are delegated to `py-jsonl`. File-like inputs
 and stdin are staged in the private temporary workspace so both indexing
