@@ -2,13 +2,15 @@
 
 ## Unreleased
 
+* **Fixed:** Reject `--details FILE` with exit code `3` when it refers to the same file as OLD or NEW, preventing the 
+    report from overwriting an input.
 * **Changed:** Resolve `DiffResult.changes()` in SQLite so only changed identities reach Python: unfiltered iteration
   scans OLD once with a `LEFT JOIN`, and operation filters run a dedicated query (~1.5x faster unfiltered, ~3x faster
   filtered on 1M records). Order and output are unchanged.
 * **Changed:** Speed up `--schema-diff` profiling: classify value types with an exact-class lookup and key fields by
   `(parent, name)`, building JSON Pointers once per distinct field at flush time (~37% less schema overhead on indexing).
 * **Added:** Document running summary, schema diff, and details in a single indexing pass and querying the details
-  report afterwards (README, details format, Python API).
+  report afterward (README, details format, Python API).
 * **Changed:** Measure coverage inside parallel indexing worker processes (`concurrency = ["multiprocessing"]`, `patch = ["subprocess"]`).
 * **Added:** Tests for result lifecycle, cleanup warnings, resource errors, stream staging, ignore paths, `--where` errors,
   schema flush boundaries and CLI edge cases, raising coverage from 82% to 98%.

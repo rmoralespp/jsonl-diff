@@ -111,7 +111,7 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--where EXPRESSION`      | JMESPath filter evaluated against each record                         |
 | `--duplicates POLICY`     | Reject duplicates or retain the `first`/`last` occurrence             |
 | `--missing-key POLICY`    | Reject absent identity fields or treat them as `null`                 |
-| `--details FILE`          | Write deterministic machine-readable JSONL changes                    |
+| `--details FILE`          | Write the JSONL change report; must not be the OLD/NEW file           |
 | `--schema-diff`           | Compare observed fields, types, nullability, and requiredness         |
 | `--schema-ignore POINTER` | Exclude a pointer from observed-schema profiling                      |
 | `--format FORMAT`         | Read `jsonl` (default) or one top-level JSON array with `json`        |
@@ -215,12 +215,12 @@ jsonl-diff old.json new.json --key id --format json
 
 ### Exit codes
 
-| Code | Meaning                                                     |
-|-----:|-------------------------------------------------------------|
-|  `0` | No record, duplicate, or requested schema differences       |
-|  `1` | Record differences, tolerated duplicates, or schema changes |
-|  `2` | Input, resource, output, or runtime failure                 |
-|  `3` | Invalid configuration or CLI usage                          |
+| Code | Meaning                                                          |
+|-----:|------------------------------------------------------------------|
+|  `0` | No record, duplicate, or requested schema differences            |
+|  `1` | Record differences, tolerated duplicates, or schema changes      |
+|  `2` | Input, resource, output, or runtime failure                      |
+|  `3` | Invalid configuration or CLI usage (e.g. `--details` is OLD/NEW) |
 
 ## Python API
 

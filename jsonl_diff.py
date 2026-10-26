@@ -1495,6 +1495,14 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]):
     jsonl.dump(events(), path, cls=_canonical_text)
 
 
+def _same_file(first: str, second: str) -> bool:
+    # A missing path cannot alias an input: a missing input fails before any write.
+    try:
+        return os.path.samefile(first, second)
+    except (OSError, ValueError):
+        return False
+
+
 class _ArgumentParser(argparse.ArgumentParser):
     def error(self, message: str):
         self.print_usage(sys.stderr)
@@ -1556,6 +1564,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error("OLD and NEW cannot both read from stdin")
     if arguments.schema_ignore and not arguments.schema_diff:
         parser.error("--schema-ignore requires --schema-diff")
+    if arguments.details is not None:
+        for label, source in (("OLD", arguments.old), ("NEW", arguments.new)):
+            if source != "-" and _same_file(arguments.details, source):
+                parser.error("--details must not be the same file as {}".format(label))
 
     old = sys.stdin.buffer if arguments.old == "-" else arguments.old
     new = sys.stdin.buffer if arguments.new == "-" else arguments.new

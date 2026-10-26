@@ -9,6 +9,10 @@ after both inputs have been completely indexed and validated.
 jsonl-diff old.jsonl new.jsonl --key id --details changes.jsonl
 ```
 
+`FILE` must not refer to the same file as OLD or NEW, including aliases such as
+relative paths, symlinks, or hard links. Such a target is rejected with exit
+code `3` before any input is read, leaving both inputs untouched.
+
 For an OLD source containing identities `1` and `2`, and a NEW source
 containing changed identity `2` and added identity `3`, the file is:
 

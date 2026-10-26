@@ -348,6 +348,42 @@ class TestTextOutput:
             "  NEW duplicates:  0\n"
         )
 
+    @pytest.mark.parametrize("target", ["old", "new", "old_alias"])
+    def test_details_rejects_input_path(self, write_jsonl, tmp_path, capsys, target):
+        # Arrange
+        old, new = _different_sources(write_jsonl)
+        alias = tmp_path / "." / "old.jsonl"
+        details = {"old": old, "new": new, "old_alias": alias}[target]
+        before = (old.read_bytes(), new.read_bytes())
+
+        # Act
+        with pytest.raises(SystemExit) as exit_info:
+            main([str(old), str(new), "--key", "id", "--details", str(details)])
+        captured = capsys.readouterr()
+
+        # Assert
+        assert exit_info.value.code == 3
+        assert "--details must not be the same file" in captured.err
+        assert (old.read_bytes(), new.read_bytes()) == before
+
+    def test_details_rejects_hard_link_to_input(self, write_jsonl, tmp_path, capsys):
+        # Arrange
+        old, new = _different_sources(write_jsonl)
+        link = tmp_path / "link.jsonl"
+        try:
+            link.hardlink_to(old)
+        except (OSError, NotImplementedError):
+            pytest.skip("hard links unavailable")
+        before = old.read_bytes()
+
+        # Act
+        with pytest.raises(SystemExit) as exit_info:
+            main([str(old), str(new), "--key", "id", "--details", str(link)])
+
+        # Assert
+        assert exit_info.value.code == 3
+        assert old.read_bytes() == before
+
     def test_details_do_not_change_stdout_summary(self, write_jsonl, tmp_path, capsys):
         # Arrange
         old, new = _different_sources(write_jsonl)
