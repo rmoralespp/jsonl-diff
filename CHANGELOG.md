@@ -2,25 +2,15 @@
 
 ## Unreleased
 
-* **Added:** Support Python 3.15: add the classifier and test it in CI (lint and coverage now run on 3.15).
-* **Changed:** Require the latest runtime dependencies: `ijson>=3.6.0`, `py-jsonl==1.5.4`, `jmespath>=1.1.0` and
-  `msgspec>=0.22.0`. `ijson 3.6.0` and `msgspec 0.22.0` are the first releases with Python 3.15 wheels, so the native
-  `yajl2_c` backend is used there instead of the slower pure-Python fallback.
-* **Fixed:** Reject `--details FILE` with exit code `3` when it refers to the same file as OLD or NEW, preventing the 
-    report from overwriting an input.
-* **Fixed:** Terminate indexing worker processes when parallel indexing is interrupted (e.g. `KeyboardInterrupt`) or a
-  worker fails to start, before the temporary workspace is removed, so no workers outlive the comparison. A worker
-  start failure is now reported as `could not start indexing workers` (exit code `2`) instead of `output failed`.
-* **Changed:** Resolve `DiffResult.changes()` in SQLite so only changed identities reach Python: unfiltered iteration
-  scans OLD once with a `LEFT JOIN`, and operation filters run a dedicated query (~1.5x faster unfiltered, ~3x faster
-  filtered on 1M records). Order and output are unchanged.
-* **Changed:** Speed up `--schema-diff` profiling: classify value types with an exact-class lookup and key fields by
-  `(parent, name)`, building JSON Pointers once per distinct field at flush time (~37% less schema overhead on indexing).
-* **Added:** Document running summary, schema diff, and details in a single indexing pass and querying the details
-  report afterward (README, details format, Python API).
-* **Changed:** Measure coverage inside parallel indexing worker processes (`concurrency = ["multiprocessing"]`, `patch = ["subprocess"]`).
-* **Added:** Tests for result lifecycle, cleanup warnings, resource errors, stream staging, ignore paths, `--where` errors,
-  schema flush boundaries and CLI edge cases, raising coverage from 82% to 98%.
+* **Added:** Support Python 3.15 in classifiers and CI (lint and coverage).
+* **Added:** Document single-pass indexing for summary, schema diff, and details, including querying the details report afterward (README, details format, Python API).
+* **Changed:** Require `ijson>=3.6.0`, `py-jsonl==1.5.4`, `jmespath>=1.1.0`, and `msgspec>=0.22.0`. Python 3.15 wheels enable the native `yajl2_c` backend instead of the slower pure-Python fallback.
+* **Changed:** Optimize `DiffResult.changes()` with SQLite queries, scanning OLD once for unfiltered iteration and using dedicated queries for operation filters (~1.5x and ~3x faster, respectively, on 1M records). Output and ordering remain unchanged.
+* **Changed:** Reduce `--schema-diff` indexing overhead by ~37% with exact-class type lookups, `(parent, name)` field keys, and deferred JSON Pointer construction.
+* **Changed:** Measure coverage in parallel indexing workers (`concurrency = ["multiprocessing"]`, `patch = ["subprocess"]`).
+* **Fixed:** Reject `--details FILE` with exit code `3` if it matches OLD or NEW, preventing input files from being overwritten.
+* **Fixed:** Terminate indexing workers on interruption or startup failure before removing the temporary workspace. Report startup failures as `could not start indexing workers` (exit code `2`) instead of `output failed`.
+* **Tests:** Expand coverage from 82% to 98%, adding tests for result lifecycle, cleanup warnings, resource errors, stream staging, ignore paths, `--where` errors, schema flush boundaries, and CLI edge cases.
 
 ## v0.2.1
 
