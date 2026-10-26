@@ -603,6 +603,35 @@ def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") ->
     result.close()
 
 
+def _start_worker(context: Any, db_path: str, source: str, side: int, config: "DiffConfig") -> Any:
+    process = context.Process(target=_index_worker, args=(db_path, source, side, config), daemon=True)
+    try:
+        process.start()
+    except OSError as error:
+        raise ResourceError("could not start indexing workers") from error
+    return process
+
+
+def _join_workers(workers: Sequence[Any]) -> bool:
+    """Wait for every worker and report whether any of them failed."""
+    failed = False
+    for process in workers:
+        process.join()
+        failed = failed or process.exitcode != 0
+    return failed
+
+
+def _stop_workers(workers: Sequence[Any], timeout: float = 5.0) -> None:
+    for process in workers:
+        if process.is_alive():
+            process.terminate()
+    for process in workers:
+        process.join(timeout)
+        if process.is_alive():
+            process.kill()
+            process.join()
+
+
 class DiffResult:
     """A context-managed, disk-backed comparison result."""
 
@@ -1140,19 +1169,14 @@ class DiffResult:
         # start method pickles it; either way the worker gets the config as it
         # stands here.
         workers = []
-        for side, source in enumerate(sources):
-            process = context.Process(
-                target=_index_worker,
-                args=(paths[side], source, side, self.config),
-                daemon=True,
-            )
-            process.start()
-            workers.append(process)
-
-        failed = False
-        for process in workers:
-            process.join()
-            failed = failed or process.exitcode != 0
+        try:
+            for side, source in enumerate(sources):
+                workers.append(_start_worker(context, paths[side], source, side, self.config))
+            failed = _join_workers(workers)
+        except BaseException:
+            # Stop workers before the caller removes the workspace they write to.
+            _stop_workers(workers)
+            raise
 
         try:
             self._open_connection(os.path.join(self._workspace.name, "index.sqlite3"))

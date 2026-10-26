@@ -1,7 +1,10 @@
 import io
 import json
+import multiprocessing
 import sqlite3
 import tempfile
+import time
+import types
 
 import pytest
 
@@ -179,6 +182,104 @@ class TestDiffResultResourceErrors:
         with pytest.raises(ResourceError, match="could not write the temporary input"):
             with diff(io.BytesIO(b'{"id":1}\n'), io.BytesIO(b'{"id":1}\n'), key="id"):
                 pass
+
+
+class _FakeWorker:
+    """Worker stand-in that ignores ``terminate()``; an unbounded ``join()`` simulates Ctrl+C."""
+
+    def __init__(self, start_error=None):
+        self.start_error = start_error
+        self.alive = False
+        self.calls = []
+
+    def start(self):
+        if self.start_error is not None:
+            raise self.start_error
+        self.alive = True
+
+    def is_alive(self):
+        return self.alive
+
+    def terminate(self):
+        self.calls.append("terminate")
+
+    def kill(self):
+        self.calls.append("kill")
+        self.alive = False
+
+    def join(self, timeout=None):
+        self.calls.append("join")
+        if timeout is None and self.alive:
+            raise KeyboardInterrupt
+
+
+class _InterruptibleProcess:
+    """Real worker process whose first unbounded ``join()`` simulates Ctrl+C in the parent."""
+
+    def __init__(self, process):
+        self._process = process
+        self._interrupted = False
+
+    def __getattr__(self, name):
+        return getattr(self._process, name)
+
+    def join(self, timeout=None):
+        if timeout is None and not self._interrupted:
+            self._interrupted = True
+            raise KeyboardInterrupt
+        self._process.join(timeout)
+
+
+def _use_workers(monkeypatch, workers):
+    context = types.SimpleNamespace(Process=lambda **kwargs: workers.pop(0))
+    monkeypatch.setattr(jsonl_diff, "_multiprocessing_context", lambda: context)
+
+
+class TestWorkerShutdown:
+    def test_interrupt_leaves_no_live_worker_processes(self, write_jsonl, monkeypatch):
+        # Arrange
+        source = write_jsonl("data.jsonl", [{"id": 1}])
+        context = multiprocessing.get_context()
+        processes = [context.Process(target=time.sleep, args=(60,), daemon=True) for _ in range(2)]
+        _use_workers(monkeypatch, [_InterruptibleProcess(process) for process in processes])
+
+        # Act
+        with pytest.raises(KeyboardInterrupt):
+            with diff(source, source, key="id"):
+                pass
+
+        # Assert
+        assert not any(process.is_alive() for process in processes)
+        assert all(process.exitcode != 0 for process in processes)
+
+    def test_worker_ignoring_terminate_is_killed(self, write_jsonl, monkeypatch):
+        # Arrange
+        source = write_jsonl("data.jsonl", [{"id": 1}])
+        workers = [_FakeWorker(), _FakeWorker()]
+        _use_workers(monkeypatch, list(workers))
+
+        # Act
+        with pytest.raises(KeyboardInterrupt):
+            with diff(source, source, key="id"):
+                pass
+
+        # Assert
+        assert workers[1].calls == ["terminate", "join", "kill", "join"]
+        assert not any(worker.alive for worker in workers)
+
+    def test_failed_start_stops_workers_and_reports_resource_error(self, write_jsonl, monkeypatch, capsys):
+        # Arrange
+        source = write_jsonl("data.jsonl", [{"id": 1}])
+        started = _FakeWorker()
+        _use_workers(monkeypatch, [started, _FakeWorker(start_error=OSError("fork failed"))])
+
+        # Act
+        exit_code = main([str(source), str(source), "--key", "id"])
+
+        # Assert
+        assert exit_code == 2
+        assert capsys.readouterr().err == "ERROR: could not start indexing workers\n"
+        assert not started.alive
 
 
 class TestStreamSources:

@@ -4,6 +4,9 @@
 
 * **Fixed:** Reject `--details FILE` with exit code `3` when it refers to the same file as OLD or NEW, preventing the 
     report from overwriting an input.
+* **Fixed:** Terminate indexing worker processes when parallel indexing is interrupted (e.g. `KeyboardInterrupt`) or a
+  worker fails to start, before the temporary workspace is removed, so no workers outlive the comparison. A worker
+  start failure is now reported as `could not start indexing workers` (exit code `2`) instead of `output failed`.
 * **Changed:** Resolve `DiffResult.changes()` in SQLite so only changed identities reach Python: unfiltered iteration
   scans OLD once with a `LEFT JOIN`, and operation filters run a dedicated query (~1.5x faster unfiltered, ~3x faster
   filtered on 1M records). Order and output are unchanged.
