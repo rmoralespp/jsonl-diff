@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.2.2
+
 * **Added:** Support Python 3.15 in classifiers and CI (lint and coverage).
 * **Added:** Document single-pass indexing for summary, schema diff, and details, including querying the details report afterward (README, details format, Python API).
 * **Changed:** Require `ijson>=3.6.0`, `py-jsonl==1.5.4`, `jmespath>=1.1.0`, and `msgspec>=0.22.0`. Python 3.15 wheels enable the native `yajl2_c` backend instead of the slower pure-Python fallback.

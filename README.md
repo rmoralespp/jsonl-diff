@@ -10,7 +10,7 @@ deterministic, and disk-backed.
 [![Python](https://img.shields.io/pypi/pyversions/jsonl-diff?style=flat-square)](https://pypi.org/project/jsonl-diff/)
 [![CI](https://img.shields.io/github/actions/workflow/status/rmoralespp/jsonl-diff/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/rmoralespp/jsonl-diff/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/codecov/c/github/rmoralespp/jsonl-diff?style=flat-square)](https://codecov.io/gh/rmoralespp/jsonl-diff)
-[![License](https://img.shields.io/github/license/rmoralespp/jsonl-diff?style=flat-square)](LICENSE)
+[![License](https://img.shields.io/github/license/rmoralespp/jsonl-diff?style=flat-square)](https://github.com/rmoralespp/jsonl-diff/blob/main/LICENSE)
 
 [Install](#install) · [Quick start](#quick-start) · [CLI](#cli) · [Python API](#python-api) · [Semantics](#comparison-semantics) · [Documentation](#documentation)
 
@@ -177,7 +177,7 @@ Using the files from the quick start, `changes.jsonl` contains:
 
 The stream starts with comparison metadata, emits only changed identities in
 deterministic order, and finishes with the complete summary. See the
-[details format](docs/details-format.md) for duplicate and schema events.
+[details format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md) for duplicate and schema events.
 
 **Get every report from a single indexing pass**
 
@@ -197,7 +197,7 @@ jq -c 'select(.type == "change" and .op == "modified")' report.jsonl
 jq -c 'select(.type == "summary")' report.jsonl
 ```
 
-See [Details format → Querying a report](docs/details-format.md#querying-a-report).
+See [Details format → Querying a report](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md#querying-a-report).
 
 **Read compressed inputs**
 
@@ -254,7 +254,7 @@ and schema changes are then iterated lazily instead of being materialized in
 memory.
 
 Applications must protect the entry point because indexing uses worker
-processes. See [Parallel indexing](docs/parallel-indexing.md#application-entry-points)
+processes. See [Parallel indexing](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/parallel-indexing.md#application-entry-points)
 for the multiprocessing requirements.
 
 The immutable result models include:
@@ -271,7 +271,7 @@ The public exception hierarchy is rooted at `JsonlDiffError`:
 - `DuplicateKeyError`
 - `ResourceError`
 
-See the [Python API reference](docs/python-api.md) for the complete signature,
+See the [Python API reference](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/python-api.md) for the complete signature,
 models, iterator behavior, numeric key semantics, and error hierarchy.
 
 ## Comparison semantics
@@ -295,7 +295,7 @@ The comparison is intentionally strict:
 `--ignore` excludes fields from content comparison. `--schema-ignore`
 independently excludes fields from observed-schema profiling.
 
-Read [Comparison semantics](docs/comparison-semantics.md) for duplicate rules,
+Read [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) for duplicate rules,
 ignore-pointer edge cases, filter order, schema inference, and numeric behavior.
 
 ## Sources and compression
@@ -332,13 +332,13 @@ editor. It intentionally does not provide:
 
 ## Documentation
 
-| Guide                                                | Covers                                                             |
-|------------------------------------------------------|--------------------------------------------------------------------|
-| [Comparison semantics](docs/comparison-semantics.md) | Identity, duplicates, ignores, filtering, numbers, and determinism |
-| [Disk-backed architecture](docs/architecture.md)     | SQLite indexes, temporary storage, cleanup, and source handling    |
-| [Parallel indexing](docs/parallel-indexing.md)       | Worker lifecycle, database merge, recovery, and entry points       |
-| [Details format](docs/details-format.md)             | Machine-readable JSONL event contract                              |
-| [Python API](docs/python-api.md)                     | Complete signature, models, iterators, and errors                  |
+| Guide                                                                                                   | Covers                                                             |
+|---------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
+| [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) | Identity, duplicates, ignores, filtering, numbers, and determinism |
+| [Disk-backed architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md)     | SQLite indexes, temporary storage, cleanup, and source handling    |
+| [Parallel indexing](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/parallel-indexing.md)       | Worker lifecycle, database merge, recovery, and entry points       |
+| [Details format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md)             | Machine-readable JSONL event contract                              |
+| [Python API](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/python-api.md)                     | Complete signature, models, iterators, and errors                  |
 
 ## Development
 
@@ -355,4 +355,4 @@ details output, source handling, compression, parallel indexing, and cleanup.
 
 ## License
 
-Licensed under the terms in [LICENSE](LICENSE).
+Licensed under the terms in [LICENSE](https://github.com/rmoralespp/jsonl-diff/blob/main/LICENSE).
