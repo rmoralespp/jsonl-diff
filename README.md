@@ -19,20 +19,22 @@ deterministic, and disk-backed.
 ---
 
 `jsonl-diff` reconciles two datasets using one or more top-level identity
-fields. Record order does not matter. It reports what is equal, added, deleted,
-modified, or duplicated while preserving the original OLD and NEW locations.
+fields. It reports what is equal, added, deleted, modified, or duplicated while
+preserving the original OLD and NEW locations.
 
+## Core capabilities
 
-## Why jsonl-diff
-
-|                             |                                                                                                  |
-|-----------------------------|--------------------------------------------------------------------------------------------------|
-| **Scales beyond memory**    | Streams both inputs and keeps the comparison index in SQLite.                                    |
-| **Matches real datasets**   | Compares records by single or composite identity instead of line number.                         |
-| **Stays deterministic**     | Produces stable summaries, change order, and machine-readable details.                           |
-| **Treats data strictly**    | Rejects malformed input, invalid identities, and duplicates by default.                          |
-| **Uses all available work** | Indexes OLD and NEW concurrently in isolated worker processes.                                   |
-| **Fits pipelines**          | Supports filtering, ignored fields, compressed sources, schema drift, and meaningful exit codes. |
+- Single or composite top-level identities.
+- Incremental JSONL/NDJSON and top-level JSON-array parsing.
+- Disk-backed, parallel indexing for large datasets.
+- Exact RFC 6901 ignore pointers.
+- JMESPath record filtering.
+- Configurable duplicate handling: `error`, `first`, or `last`.
+- Representation-sensitive numeric comparison.
+- Observed-schema drift for fields, types, nullability, and requiredness.
+- Deterministic JSONL details output.
+- Local, HTTP/HTTPS, file-like, and compressed sources.
+- CLI and Python API backed by the same comparison engine.
 
 ## Install
 
@@ -76,20 +78,6 @@ Records:
 ```
 
 Property order and record order do not affect the result.
-
-## Core capabilities
-
-- Single or composite top-level identities.
-- Incremental JSONL/NDJSON and top-level JSON-array parsing.
-- Disk-backed, parallel indexing for large datasets.
-- Exact RFC 6901 ignore pointers.
-- JMESPath record filtering.
-- Configurable duplicate handling: `error`, `first`, or `last`.
-- Representation-sensitive numeric comparison.
-- Observed-schema drift for fields, types, nullability, and requiredness.
-- Deterministic JSONL details output.
-- Local, HTTP/HTTPS, file-like, and compressed sources.
-- CLI and Python API backed by the same comparison engine.
 
 ## CLI
 
