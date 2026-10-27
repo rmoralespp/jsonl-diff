@@ -1140,8 +1140,10 @@ class DiffResult:
             error_line[0] = line
 
         try:
-            with self._connection:
-                self._insert_records(_records(source, on_error, self.config.format), side, name)
+            # Close the reader even when a batch fails mid-stream: a suspended
+            # generator keeps the input open, and Windows cannot then remove it.
+            with self._connection, contextlib.closing(_records(source, on_error, self.config.format)) as records:
+                self._insert_records(records, side, name)
         except JsonlDiffError:
             raise
         except (OSError, EOFError, ValueError, RuntimeError, ijson.JSONError) as error:

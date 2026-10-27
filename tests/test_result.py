@@ -147,6 +147,30 @@ class TestDiffResultCleanup:
             with diff(source, source, key="id"):
                 pass
 
+    def test_input_reader_closed_when_batch_fails_mid_stream(self, write_jsonl, monkeypatch):
+        # Arrange: the duplicate is detected when the first batch is flushed, while records remain unread.
+        records = [{"id": 0}] + [{"id": index} for index in range(jsonl_diff._INSERT_BATCH * 2)]
+        old = write_jsonl("old.jsonl", records)
+        new = write_jsonl("new.jsonl", [{"id": 0}])
+        readers = []
+        original_records = jsonl_diff._records
+
+        def tracking_records(*args):
+            reader = original_records(*args)
+            readers.append(reader)
+            return reader
+
+        monkeypatch.setattr(jsonl_diff, "_records", tracking_records)
+
+        # Act
+        with pytest.raises(InputError, match="duplicate key"):
+            with diff(old, new, key="id"):
+                pass
+
+        # Assert: a suspended reader keeps the input open, which Windows refuses to delete.
+        assert readers
+        assert all(reader.gi_frame is None for reader in readers)
+
 
 class TestDiffResultResourceErrors:
     def test_workspace_creation_failure_ko(self, write_jsonl, monkeypatch):

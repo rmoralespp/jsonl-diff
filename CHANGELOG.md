@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+* **Fixed:** Close the input reader when indexing fails mid-stream (e.g. a duplicate key error after the first batch). The open handle kept the staged input locked, so on Windows the temporary workspace could not be removed and `could not remove temporary files` was emitted.
+
 ## v0.2.2
 
 * **Added:** Support Python 3.15 in classifiers and CI (lint and coverage).
