@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+* **Changed:** Refresh `uv.lock` updating dev/docs dependencies. Runtime dependency constraints are unchanged.
 * **Fixed:** Close the input reader when indexing fails mid-stream (e.g. a duplicate key error after the first batch). The open handle kept the staged input locked, so on Windows the temporary workspace could not be removed and `could not remove temporary files` was emitted.
 
 ## v0.2.2
