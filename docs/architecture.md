@@ -61,33 +61,20 @@ profiled as terminal `array` values; their elements are not inferred.
 
 ## Field-diff reread
 
-The index stores fingerprints rather than records, so `field_diff=True` /
-`--field-diff` adds a sequential pass after the summary is computed. For each
-side, SQLite lists the modified rows in physical-line order; the source is
-reread from the start, only those lines are decoded, `--ignore` is applied, and
-the canonical body must reproduce the indexed length and SHA-256 digest. A
-mismatch, a missing line, or an unreadable source fails the context entry with
-`InputError` (`source changed during comparison`) before any result or details
-file is produced.
+The index stores fingerprints rather than records, so field diff adds a
+sequential reread of both sides after the summary. Only modified lines are
+decoded; their canonical body (after `--ignore`) must match the indexed length
+and digest, otherwise entering the context fails with `InputError`
+(`source changed during comparison`). Every line is still read, compressed
+sources are decompressed again, `--format json` is fully reparsed, and URLs are
+downloaded again; staged stdin and file-like inputs use the workspace copy.
 
-Verified canonical bodies are appended to a `field_bodies` table in physical
-order and indexed by side and identity once both sides are stored.
-`changes()` reads both sides in identity order alongside the
-change query and computes each patch lazily, so patches are never held in
-memory together. Every member of a canonical body is itself canonical, so the
-patch walker splits objects into undecoded members, compares them as bytes, and
-decodes only the values that changed. Extra disk usage is about twice the canonical size of the
-modified records. The details writer pre-aggregates `field_summary` totals
-for at most one insert batch of distinct paths and merges them into a
-`field_counts` table keyed by path, whose primary-key order also yields the
-sorted output. Stable schemas never leave memory, while dynamic property names
-(for example, objects keyed by ID) spill to disk instead of growing RAM.
-
-The reread decodes only modified lines, but every line still has to be read and
-split, and compressed sources are decompressed again; `--format json` sources
-are fully reparsed by `ijson`. Staged stdin and file-like inputs are reread
-from the workspace copy; URLs are downloaded again. Without `field_diff`
-nothing is reread and no extra table is created.
+Verified bodies go to a `field_bodies` table indexed by side and identity
+(about twice the canonical size of the modified records). `changes()` computes
+each patch lazily, comparing undecoded members as bytes and decoding only
+changed values. `field_summary` totals are buffered per batch and merged into a
+`field_counts` table keyed by path, so dynamic property names spill to disk
+instead of growing memory. Without field diff nothing is reread.
 
 ## Cleanup
 

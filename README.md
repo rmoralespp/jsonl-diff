@@ -178,18 +178,15 @@ jsonl-diff old.jsonl new.jsonl \
   --field-diff
 ```
 
-With the quick-start files, the modified record gains an RFC 6902 patch that
-also carries the OLD value, followed by per-field totals:
+Modified records gain an RFC 6902 patch (with the OLD value), followed by
+per-field totals:
 
 ```jsonl
 {"key":[2],"new_line":1,"old_line":2,"op":"modified","patch":[{"old":"Grace","op":"replace","path":"/name","value":"Grace Hopper"}],"type":"change"}
 {"added":0,"path":"/name","removed":0,"replaced":1,"type":"field_summary"}
 ```
 
-Nested objects are diffed recursively; arrays are replaced as a whole. Only
-modified lines are reread and decoded, so the extra cost grows with the number
-of modified records. See
-[Field-level patches](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md#field-level-patches).
+See [Field-level patches](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md#field-level-patches).
 
 **Get every report from a single indexing pass**
 

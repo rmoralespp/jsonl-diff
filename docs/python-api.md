@@ -123,21 +123,12 @@ For additions, `old`/`old_line` are `None`; for deletions, `new`/`new_line` are
 `None`; modifications have both locations. Location sources are labeled `OLD`
 and `NEW`.
 
-`Change.patch` is `None` unless `field_diff=True`, in which case every
-modified change carries a non-empty tuple of immutable `FieldChange` values
-(added and deleted changes keep `patch=None`):
-
-- `op`: a `FieldOperation` (`ADD`, `REMOVE`, or `REPLACE`, a `str` enum whose
-  values are the RFC 6902 names `"add"`, `"remove"`, `"replace"`);
-- `path`: an RFC 6901 pointer;
-- `old`: the OLD value, meaningful for `remove` and `replace`;
-- `value`: the NEW value, meaningful for `add` and `replace`.
-
-Objects are compared recursively and arrays atomically; values keep their
-parsed types (`int`, `Decimal`, …). Because values may be lists or dicts, a
-`Change` with a patch is not necessarily hashable. Entering the context rereads the modified
-lines of both sources and fails with `InputError` if a source changed after
-indexing. See [Details format → Field-level patches](details-format.md#field-level-patches).
+With `field_diff=True`, modified changes carry `Change.patch`, a tuple of
+`FieldChange(op, path, old, value)` where `op` is a `FieldOperation` (`str`
+enum: `"add"`, `"remove"`, `"replace"`); otherwise `patch` is `None`. Values
+keep their parsed types, so a `Change` with a patch may not be hashable.
+Entering the context fails with `InputError` if a source changed after
+indexing. See [Field-level patches](details-format.md#field-level-patches).
 
 ```python
 with diff("old.jsonl", "new.jsonl", key="id", field_diff=True) as result:
@@ -193,15 +184,11 @@ with diff("old.jsonl", "new.jsonl", key="id", schema_diff=True) as result:
 Schema iteration requires an open result and raises `RuntimeError` when schema
 diff was not enabled. Schema summary values remain available after closing.
 
-With numeric keys, API key components use the same types as parsed record
-values: JSON integers are `int` and other numbers are `decimal.Decimal`. For
-example, JSON identity `7` is returned as `7` and `1.50` as `Decimal("1.50")`;
-JSON strings, booleans, objects, and arrays retain their JSON types. Object
-member order is canonicalized recursively, while array element order remains
-significant. Number representation remains significant for identity: `1`,
-`1.0`, and `1.00` identify different records even though they compare equal in
-Python. Details JSONL writes identity values as JSON values, including
-arbitrary-precision numbers.
+Key components use the parsed JSON types: integers are `int` and other numbers
+`decimal.Decimal` (`7` → `7`, `1.50` → `Decimal("1.50")`). Object member order
+is canonicalized, array order is significant, and number representation is
+significant for identity: `1` and `1.0` are different records even though they
+compare equal in Python.
 
 ## API errors
 

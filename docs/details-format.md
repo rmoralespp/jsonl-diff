@@ -85,8 +85,7 @@ Schema events precede duplicate and record changes:
 ## Field-level patches
 
 `--field-diff` (requires `--details`) adds an [RFC 6902](https://www.rfc-editor.org/rfc/rfc6902)
-JSON Patch to every modified change, describing how the OLD record becomes the
-NEW one:
+JSON Patch turning the OLD record into the NEW one to every modified change:
 
 ```bash
 jsonl-diff old.jsonl new.jsonl --key id --details changes.jsonl --field-diff
@@ -101,34 +100,16 @@ jsonl-diff old.jsonl new.jsonl --key id --details changes.jsonl --field-diff
 {"added":0,"deleted":0,"equal":0,"modified":1,"new_duplicates":0,"old_duplicates":0,"type":"summary"}
 ```
 
-- Operations are `add`, `remove`, and `replace`, in depth-first member-name
-  order within each patch. `path` is an RFC 6901 pointer (`~` → `~0`, `/` → `~1`).
-- `value` is the NEW value (`add`, `replace`); `old` is the OLD value
-  (`remove`, `replace`). RFC 6902 requires appliers to ignore unknown members,
-  so patches remain directly applicable while carrying the before image.
-- Objects are compared recursively; member order is irrelevant.
-- Arrays are atomic: any difference replaces the whole array with both full
-  images. Element moves, insertions, and deletions are not computed.
-- Comparison is representation-sensitive, like record comparison: `1` → `1.0`,
-  `1.0` → `1.00`, and `1` → `true` are all `replace` operations.
-- Fields excluded with `--ignore` never appear, and identity fields never
-  change, so a modified record always has a non-empty patch.
-- `field_summary` has one record per distinct changed path, so dynamic
-  property names produce many records. Totals are aggregated on disk, so
-  memory stays bounded.
+- Operations are `add`, `remove`, and `replace`, depth first in member-name
+  order; `path` is an RFC 6901 pointer. `value` is the NEW value and `old` the
+  OLD one (extra members are ignored by RFC 6902 appliers).
+- Objects are compared recursively; arrays are replaced as a whole.
+- Comparison is representation-sensitive: `1` → `1.0` is a `replace`.
+- Fields excluded with `--ignore` never appear.
 
-Patches are computed by rereading only the modified lines of both inputs after
-indexing (see [architecture](architecture.md#field-diff-reread)). If an input
-changed between the two passes, the run fails with exit code `2` before the
-details file is written.
-
-```bash
-# Changes of one field across all modified records
-jq -c 'select(.type == "change" and .patch) | {key, patch: [.patch[] | select(.path == "/age")]}' changes.jsonl
-
-# Most frequently changed fields
-jq -s -c 'map(select(.type == "field_summary")) | sort_by(-(.added + .removed + .replaced)) | .[:10]' changes.jsonl
-```
+Patches require rereading the modified lines after indexing (see
+[architecture](architecture.md#field-diff-reread)); if an input changed
+meanwhile, the run fails with exit code `2`.
 
 ## Querying a report
 

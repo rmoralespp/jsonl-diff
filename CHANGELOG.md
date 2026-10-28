@@ -2,8 +2,8 @@
 
 ## Unreleased
 
-* **Added:** `--field-diff` (requires `--details`) and `diff(..., field_diff=True)` add an RFC 6902 `patch` to every modified change (`add`/`remove`/`replace`, with the OLD value in `old`) and per-path `field_summary` records. Objects are compared recursively, arrays atomically, and numbers by representation. Only modified lines are reread and verified against the index; a source changed between passes fails with exit code `2`. Exposed as `Change.patch` and the new `FieldChange`/`FieldOperation` models.
-* **Changed:** Python API keys (`Change.key`, `Duplicate.key`, `DuplicateKeyError.key`) are decoded with msgspec like record values, so JSON integers are now `int` instead of `Decimal` (non-integer numbers remain `Decimal`). Values compare and hash equal to before; details JSONL output is unchanged.
+* **Added:** `--field-diff` (requires `--details`) and `diff(..., field_diff=True)` add an RFC 6902 `patch` to modified changes and per-path `field_summary` records (`Change.patch`, `FieldChange`, `FieldOperation`).
+* **Changed:** Python API keys return JSON integers as `int` instead of `Decimal`; they compare and hash equal, and details output is unchanged.
 
 ## v0.2.3
 
