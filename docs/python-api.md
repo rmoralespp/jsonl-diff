@@ -50,6 +50,7 @@ def diff(
         schema_diff: bool = False,
         schema_ignore: Sequence[str] = (),
         format: str = "jsonl",
+        field_diff: bool = False,
 ) -> DiffResult:
     ...
 ```
@@ -122,6 +123,20 @@ For additions, `old`/`old_line` are `None`; for deletions, `new`/`new_line` are
 `None`; modifications have both locations. Location sources are labeled `OLD`
 and `NEW`.
 
+With `field_diff=True`, modified changes carry `Change.patch`, a tuple of
+`FieldChange(op, path, old, value)` where `op` is a `FieldOperation` (`str`
+enum: `"add"`, `"remove"`, `"replace"`); otherwise `patch` is `None`. Values
+keep their parsed types, so a `Change` with a patch may not be hashable.
+Entering the context fails with `InputError` if a source changed after
+indexing. See [Field-level patches](details-format.md#field-level-patches).
+
+```python
+with diff("old.jsonl", "new.jsonl", key="id", field_diff=True) as result:
+    for change in result.changes(ChangeOperation.MODIFIED):
+        for field in change.patch:
+            print(change.key, field.op, field.path, field.old, field.value)
+```
+
 Pass a `ChangeOperation` to filter without materializing all changes:
 
 ```python
@@ -169,13 +184,11 @@ with diff("old.jsonl", "new.jsonl", key="id", schema_diff=True) as result:
 Schema iteration requires an open result and raises `RuntimeError` when schema
 diff was not enabled. Schema summary values remain available after closing.
 
-With numeric keys, API key components are `decimal.Decimal` values. For
-example, JSON identity `7` is returned as `Decimal("7")`; JSON strings,
-booleans, objects, and arrays retain their JSON types. Object member order is
-canonicalized recursively, while array element order remains significant.
-Decimal scale and exponent representation remain significant for identity:
-`Decimal("1")` and `Decimal("1.0")` identify different records. Details JSONL
-writes identity values as JSON values, including arbitrary-precision numbers.
+Key components use the parsed JSON types: integers are `int` and other numbers
+`decimal.Decimal` (`7` → `7`, `1.50` → `Decimal("1.50")`). Object member order
+is canonicalized, array order is significant, and number representation is
+significant for identity: `1` and `1.0` are different records even though they
+compare equal in Python.
 
 ## API errors
 

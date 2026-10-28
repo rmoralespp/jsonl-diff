@@ -282,6 +282,19 @@ class TestCliExitCodes:
         assert captured_exit.value.code == 3
         assert "--schema-ignore requires --schema-diff" in capsys.readouterr().err
 
+    def test_field_diff_without_details_is_rejected(self, write_jsonl, capsys):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        with pytest.raises(SystemExit) as captured_exit:
+            main([str(old), str(new), "--key", "id", "--field-diff"])
+
+        # Assert
+        assert captured_exit.value.code == 3
+        assert "--field-diff requires --details" in capsys.readouterr().err
+
 
 class TestKeyOptionParsing:
     def test_comma_separated_keys_with_surrounding_whitespace_are_trimmed(
@@ -530,6 +543,85 @@ class TestDetailsNumberOutput:
 
 
 class TestDetailsOutput:
+    @pytest.mark.parametrize("stdin_side", [None, "old"])
+    def test_field_diff_writes_patches_and_field_summaries(
+        self, write_jsonl, tmp_path, monkeypatch, capsys, stdin_side,
+    ):
+        # Arrange
+        old_records = ['{"id":1,"a":1,"b":{"c":1.0}}', '{"id":2,"a":1,"gone":[1]}', '{"id":3}']
+        old = write_jsonl("old.jsonl", old_records)
+        new = write_jsonl("new.jsonl", ['{"id":2,"a":2,"z":true}', '{"id":1,"a":2,"b":{"c":1.00}}', '{"id":4}'])
+        details = tmp_path / "changes.jsonl"
+        old_argument = str(old)
+        if stdin_side == "old":
+            stdin = types.SimpleNamespace(buffer=io.BytesIO(old.read_bytes()))
+            monkeypatch.setattr(jsonl_diff.sys, "stdin", stdin)
+            old_argument = "-"
+
+        # Act
+        exit_code = main([old_argument, str(new), "--key", "id", "--details", str(details), "--field-diff", "--quiet"])
+        lines = details.read_text(encoding="utf-8").splitlines()
+
+        # Assert
+        assert exit_code == 1
+        assert not capsys.readouterr().out
+        assert lines == [
+            '{"duplicates":"error","field_diff":true,"ignore":[],"key":["id"],"missing_key":"error",'
+            '"type":"meta","where":null}',
+            '{"key":[1],"new_line":2,"old_line":1,"op":"modified","patch":['
+            '{"old":1,"op":"replace","path":"/a","value":2},'
+            '{"old":1.0,"op":"replace","path":"/b/c","value":1.00}],"type":"change"}',
+            '{"key":[2],"new_line":1,"old_line":2,"op":"modified","patch":['
+            '{"old":1,"op":"replace","path":"/a","value":2},'
+            '{"old":[1],"op":"remove","path":"/gone"},'
+            '{"op":"add","path":"/z","value":true}],"type":"change"}',
+            '{"key":[3],"old_line":3,"op":"deleted","type":"change"}',
+            '{"key":[4],"new_line":3,"op":"added","type":"change"}',
+            '{"added":0,"path":"/a","removed":0,"replaced":2,"type":"field_summary"}',
+            '{"added":0,"path":"/b/c","removed":0,"replaced":1,"type":"field_summary"}',
+            '{"added":0,"path":"/gone","removed":1,"replaced":0,"type":"field_summary"}',
+            '{"added":1,"path":"/z","removed":0,"replaced":0,"type":"field_summary"}',
+            '{"added":1,"deleted":1,"equal":0,"modified":2,"new_duplicates":0,"old_duplicates":0,"type":"summary"}',
+        ]
+
+    def test_field_summaries_spilled_to_disk_keep_totals_and_path_order(self, write_jsonl, tmp_path, monkeypatch):
+        # Arrange: tiny batches force repeated SQLite merges of the same path.
+        monkeypatch.setattr(jsonl_diff, "_INSERT_BATCH", 2)
+        names = ["a", "b", "\u00e9", "\uff21", "\U0001f600"]
+        old = write_jsonl("old.jsonl", [{"id": 1, "m": dict.fromkeys(names, 1)}, {"id": 2, "m": {"a": 1}}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "m": dict.fromkeys(names, 2)}, {"id": 2, "m": {"a": 2, "z": 1}}])
+        details = tmp_path / "changes.jsonl"
+
+        # Act
+        main([str(old), str(new), "--key", "id", "--details", str(details), "--field-diff", "--quiet"])
+        lines = [json.loads(line) for line in details.read_text(encoding="utf-8").splitlines()]
+
+        # Assert
+        summaries = [
+            (line["path"], line["added"], line["replaced"]) for line in lines if line["type"] == "field_summary"
+        ]
+        assert summaries == [
+            ("/m/a", 0, 2),
+            ("/m/b", 0, 1),
+            ("/m/z", 1, 0),
+            ("/m/\u00e9", 0, 1),
+            ("/m/\uff21", 0, 1),
+            ("/m/\U0001f600", 0, 1),
+        ]
+
+    def test_field_diff_without_modified_records_writes_no_field_summaries(self, write_jsonl, tmp_path):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}, {"id": 2}])
+        details = tmp_path / "changes.jsonl"
+
+        # Act
+        main([str(old), str(new), "--key", "id", "--details", str(details), "--field-diff", "--quiet"])
+        types_written = [json.loads(line)["type"] for line in details.read_text(encoding="utf-8").splitlines()]
+
+        # Assert
+        assert types_written == ["meta", "change", "summary"]
+
     def test_file_contains_versioned_metadata_and_summary(self, write_jsonl, tmp_path, capsys):
         # Arrange
         old = write_jsonl("old.jsonl", [{"country": "ES", "customer": 1, "volatile": "old"}])

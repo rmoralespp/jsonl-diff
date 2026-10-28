@@ -33,6 +33,7 @@ preserving the original OLD and NEW locations.
 - Representation-sensitive numeric comparison.
 - Observed-schema drift for fields, types, nullability, and requiredness.
 - Deterministic JSONL details output.
+- Optional field-level RFC 6902 patches for modified records.
 - Local, HTTP/HTTPS, file-like, and compressed sources.
 - CLI and Python API backed by the same comparison engine.
 
@@ -84,7 +85,7 @@ Property order and record order do not affect the result.
 ```text
 jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
            [--duplicates {error,first,last}] [--missing-key {error,null}]
-           [--details FILE] [--quiet]
+           [--details FILE] [--field-diff] [--quiet]
            [--schema-diff] [--schema-ignore POINTER] [--format {jsonl,json}]
            old new
 ```
@@ -98,6 +99,7 @@ jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
 | `--duplicates POLICY`     | Reject duplicates or retain the `first`/`last` occurrence             |
 | `--missing-key POLICY`    | Reject absent identity fields or treat them as `null`                 |
 | `--details FILE`          | Write the JSONL change report; must not be the OLD/NEW file           |
+| `--field-diff`            | Add RFC 6902 field patches to modified records; requires `--details`  |
 | `--schema-diff`           | Compare observed fields, types, nullability, and requiredness         |
 | `--schema-ignore POINTER` | Exclude a pointer from observed-schema profiling                      |
 | `--format FORMAT`         | Read `jsonl` (default) or one top-level JSON array with `json`        |
@@ -166,6 +168,25 @@ Using the files from the quick start, `changes.jsonl` contains:
 The stream starts with comparison metadata, emits only changed identities in
 deterministic order, and finishes with the complete summary. See the
 [details format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md) for duplicate and schema events.
+
+**See which fields changed**
+
+```bash
+jsonl-diff old.jsonl new.jsonl \
+  --key id \
+  --details changes.jsonl \
+  --field-diff
+```
+
+Modified records gain an RFC 6902 patch (with the OLD value), followed by
+per-field totals:
+
+```jsonl
+{"key":[2],"new_line":1,"old_line":2,"op":"modified","patch":[{"old":"Grace","op":"replace","path":"/name","value":"Grace Hopper"}],"type":"change"}
+{"added":0,"path":"/name","removed":0,"replaced":1,"type":"field_summary"}
+```
+
+See [Field-level patches](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md#field-level-patches).
 
 **Get every report from a single indexing pass**
 
@@ -308,8 +329,7 @@ workers can reopen them.
 `jsonl-diff` is a dataset reconciliation tool—not a visual or structural JSON
 editor. It intentionally does not provide:
 
-- line-position or field-level diffs;
-- JSON Patch output;
+- line-position diffs or array element-level patches;
 - move or rename detection;
 - nested identities or automatic key detection;
 - fuzzy matching or numeric tolerances;
@@ -339,7 +359,7 @@ uv run python -Wd -m pytest tests/ --cov
 ```
 
 The suite covers CLI behavior, identity and canonicalization, validation,
-details output, source handling, compression, parallel indexing, and cleanup.
+details output, field-level patches, source handling, compression, parallel indexing, and cleanup.
 
 ## License
 

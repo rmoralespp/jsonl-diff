@@ -3,7 +3,6 @@
 import argparse
 import contextlib
 import hashlib
-import json
 import os
 import sqlite3
 import sys
@@ -13,7 +12,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from enum import Enum
 from operator import itemgetter
-from typing import Any, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
 import ijson
 import jmespath
@@ -51,6 +50,9 @@ _SCHEMA_TYPE_INDEX_BY_CLASS = {
 
 _CANONICAL_ENCODER = msgspec.json.Encoder(decimal_format="number", order="sorted")
 _INPUT_DECODER = msgspec.json.Decoder(float_hook=Decimal)
+# Field patches split canonical objects into members kept as undecoded bytes.
+_RAW_MEMBERS_DECODER = msgspec.json.Decoder(Dict[str, msgspec.Raw])
+_OBJECT_START = ord("{")
 
 
 class JsonlDiffError(Exception):
@@ -122,6 +124,14 @@ class SchemaChangeOperation(str, Enum):
     TYPES_CHANGED = "types_changed"
     NULLABILITY_CHANGED = "nullability_changed"
     REQUIREDNESS_CHANGED = "requiredness_changed"
+
+
+class FieldOperation(str, Enum):
+    """An RFC 6902 operation kind used by field-level patches."""
+
+    ADD = "add"
+    REMOVE = "remove"
+    REPLACE = "replace"
 
 
 @dataclass(frozen=True)
@@ -259,6 +269,22 @@ class DiffConfig:
     schema_ignore: Tuple[str, ...] = ()
     format: str = "jsonl"
     missing_key: MissingKeyPolicy = MissingKeyPolicy.ERROR
+    field_diff: bool = False
+
+
+@dataclass(frozen=True)
+class FieldChange:
+    """
+    One RFC 6902 operation between the OLD and NEW versions of a modified record.
+
+    `op` is a `FieldOperation`, and `path` is an RFC 6901 pointer. `old` is
+    meaningful for `remove` and `replace`; `value` for `add` and `replace`.
+    """
+
+    op: FieldOperation
+    path: str
+    old: Any = None
+    value: Any = None
 
 
 @dataclass(frozen=True)
@@ -269,6 +295,8 @@ class Change:
     key: IdentityKey
     old: Optional[SourceLocation]
     new: Optional[SourceLocation]
+    # Populated for modified identities only when `field_diff` is enabled.
+    patch: Optional[Tuple[FieldChange, ...]] = None
 
     @property
     def old_line(self) -> Optional[int]:
@@ -306,19 +334,6 @@ class Duplicate:
         return self.discarded.line
 
 
-def _reject_constant(value: str):
-    raise ValueError("invalid JSON number {!r}".format(value))
-
-
-def _decode_json(value: str) -> Any:
-    return json.loads(
-        value,
-        parse_int=Decimal,
-        parse_float=Decimal,
-        parse_constant=_reject_constant,
-    )
-
-
 def _canonical(value: Any) -> bytes:
     return _CANONICAL_ENCODER.encode(value)
 
@@ -332,8 +347,58 @@ def _fingerprint(canonical: bytes) -> Tuple[int, bytes]:
 
 
 def _pointer_child(path: str, token: str) -> str:
-    escaped = token.replace("~", "~0").replace("/", "~1")
-    return "{}/{}".format(path, escaped)
+    # Most member names need no escaping, so skip the replacements for them.
+    if "~" in token or "/" in token:
+        token = token.replace("~", "~0").replace("/", "~1")
+    return path + "/" + token
+
+
+def _field_keys(old: Dict[str, Any], new: Dict[str, Any]) -> Iterator[str]:
+    old_keys = old.keys()
+    # Bodies are decoded from canonical bytes, so equal key sets are already sorted.
+    return iter(old if old_keys == new.keys() else sorted(old_keys | new.keys()))
+
+
+def _field_patch(
+    old: bytes,
+    new: bytes,
+    decode: Callable[[Any], Any] = _INPUT_DECODER.decode,
+    members: Callable[[Any], Dict[str, msgspec.Raw]] = _RAW_MEMBERS_DECODER.decode,
+) -> list:
+    """
+    Return the RFC 6902 operations turning canonical object `old` into `new`.
+
+    Objects recurse; arrays and scalars are replaced atomically. Every member
+    of a canonical encoding is itself canonical, so members are compared as
+    raw bytes: equality is representation-sensitive like record comparison
+    (`1`, `1.0`, `1.00`, and `true` all differ), and only changed values are
+    decoded. Nested objects are traversed with an explicit stack, depth
+    first, so any depth accepted while indexing is also accepted here.
+    """
+    patch = []
+    old_members, new_members = members(old), members(new)
+    stack = [("", old_members, new_members, _field_keys(old_members, new_members))]
+    while stack:
+        path, old_object, new_object, keys = stack[-1]
+        for key in keys:
+            before = old_object.get(key)
+            after = new_object.get(key)
+            if before == after:
+                continue
+            if before is None:
+                patch.append(FieldChange(FieldOperation.ADD, _pointer_child(path, key), value=decode(after)))
+            elif after is None:
+                patch.append(FieldChange(FieldOperation.REMOVE, _pointer_child(path, key), old=decode(before)))
+            elif memoryview(before)[0] == _OBJECT_START and memoryview(after)[0] == _OBJECT_START:
+                before, after = members(before), members(after)
+                stack.append((_pointer_child(path, key), before, after, _field_keys(before, after)))
+                break
+            else:
+                child = _pointer_child(path, key)
+                patch.append(FieldChange(FieldOperation.REPLACE, child, decode(before), decode(after)))
+        else:
+            stack.pop()
+    return patch
 
 
 def _schema_type(value: Any) -> str:
@@ -522,6 +587,106 @@ _CHANGE_QUERIES = {
     ChangeOperation.DELETED: _DELETED_QUERY + " ORDER BY 1",
     ChangeOperation.MODIFIED: _MODIFIED_QUERY + " ORDER BY 1",
 }
+# Modified identities with both fingerprints, resolved with a single identity
+# join; each side's reread then sorts only these rows by physical line.
+_FIELD_LINES_QUERY = """
+    CREATE TABLE field_lines AS
+    SELECT o.identity, o.line AS old_line, o.length AS old_length, o.digest AS old_digest,
+           n.line AS new_line, n.length AS new_length, n.digest AS new_digest
+    FROM records AS o
+    JOIN records AS n
+      ON o.side = 0 AND n.side = 1 AND o.identity = n.identity
+    WHERE o.length <> n.length OR o.digest <> n.digest
+"""
+_SIDE_LINES_QUERIES = (
+    "SELECT old_line, identity, old_length, old_digest FROM field_lines ORDER BY old_line",
+    "SELECT new_line, identity, new_length, new_digest FROM field_lines ORDER BY new_line",
+)
+# Both sides hold exactly the modified identities, so reading them in identity
+# order pairs them with the modified rows of every `_CHANGE_QUERIES` entry.
+_FIELD_BODIES_QUERY = "SELECT identity, body FROM field_bodies WHERE side = ? ORDER BY identity"
+_FIELD_BODIES_INSERT = "INSERT INTO field_bodies VALUES (?, ?, ?)"
+# `field_counts` column per patch operation, in `field_summary` order.
+_FIELD_COUNT_COLUMNS = {
+    FieldOperation.ADD: 0,
+    FieldOperation.REMOVE: 1,
+    FieldOperation.REPLACE: 2,
+}
+_FIELD_COUNTS_UPSERT = """
+    INSERT INTO field_counts VALUES (?, ?, ?, ?)
+    ON CONFLICT (path) DO UPDATE SET
+        added = added + excluded.added,
+        removed = removed + excluded.removed,
+        replaced = replaced + excluded.replaced
+"""
+# TEXT keys compare as UTF-8 bytes, which matches Python's code-point order.
+_FIELD_COUNTS_QUERY = "SELECT path, added, removed, replaced FROM field_counts ORDER BY path"
+_SIDE_NAMES = ("OLD", "NEW")
+# Exceptions a reader raises for malformed or unreadable input.
+_READ_ERRORS = (OSError, EOFError, ValueError, RuntimeError, ijson.JSONError)
+
+
+@contextlib.contextmanager
+def _sqlite_resource(message: str) -> Iterator[None]:
+    try:
+        yield
+    except sqlite3.DatabaseError as error:
+        raise ResourceError(message) from error
+
+
+def _passthrough(line: str) -> str:
+    return line
+
+
+class _FieldCounter:
+    """
+    Per-path `field_summary` totals with bounded memory.
+
+    Totals are pre-aggregated for at most `_INSERT_BATCH` distinct paths and
+    then merged into SQLite, so stable schemas never touch the database while
+    dynamic member names (objects keyed by ID) spill to disk instead of RAM.
+    """
+
+    def __init__(self, connection: sqlite3.Connection) -> None:
+        self._connection = connection
+        self._pending = {}
+        with _sqlite_resource("could not write the temporary index"):
+            connection.execute("DROP TABLE IF EXISTS field_counts")
+            connection.execute(
+                """
+                CREATE TABLE field_counts (
+                    path TEXT PRIMARY KEY,
+                    added INTEGER NOT NULL,
+                    removed INTEGER NOT NULL,
+                    replaced INTEGER NOT NULL
+                ) WITHOUT ROWID
+                """,
+            )
+
+    def add(self, patch: Iterable[FieldChange]) -> None:
+        pending = self._pending
+        for field_change in patch:
+            counts = pending.get(field_change.path)
+            if counts is None:
+                if len(pending) >= _INSERT_BATCH:
+                    self._flush()
+                counts = pending[field_change.path] = [0, 0, 0]
+            counts[_FIELD_COUNT_COLUMNS[field_change.op]] += 1
+
+    def totals(self) -> Iterator[Tuple[str, int, int, int]]:
+        """Yield `(path, added, removed, replaced)` in path order."""
+        self._flush()
+        with _sqlite_resource("could not read the temporary index"):
+            yield from self._connection.execute(_FIELD_COUNTS_QUERY)
+
+    def _flush(self) -> None:
+        if self._pending:
+            with _sqlite_resource("could not write the temporary index"):
+                self._connection.executemany(
+                    _FIELD_COUNTS_UPSERT,
+                    [(path, *counts) for path, counts in self._pending.items()],
+                )
+            self._pending.clear()
 
 
 class _TopLevelArrayReader:
@@ -558,13 +723,19 @@ def _array_records(source: Any) -> Iterator[Any]:
         yield from ijson.items(_TopLevelArrayReader(stream), "item", use_float=False)
 
 
-def _records(source: Any, on_error: Any, input_format: str) -> Iterator[Any]:
+def _records(
+    source: Any,
+    on_error: Any,
+    input_format: str,
+    decode: Callable[[str], Any] = _INPUT_DECODER.decode,
+) -> Iterator[Any]:
+    """Iterate source records; `decode` applies to JSONL lines only, arrays arrive decoded."""
     if input_format == "json":
         yield from _array_records(source)
-        return
-    # Non-integer numbers become Decimal while integers stay native `int`,
-    # preserving their parsed representation. Duplicate keys use last-wins.
-    yield from jsonl.load(source, cls=_INPUT_DECODER.decode, _on_error=on_error)
+    else:
+        # Non-integer numbers become Decimal while integers stay native `int`, preserving their parsed representation.
+        # Duplicate keys use last-wins.
+        yield from jsonl.load(source, cls=decode, _on_error=on_error)
 
 
 def _multiprocessing_context() -> Any:
@@ -591,9 +762,7 @@ def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") ->
     result = None
     try:
         result = DiffResult(source, source, config)
-        result._open_connection(db_path)
-        result._index(source, side)
-        result._connection.commit()
+        result._index_into(db_path, source, side)
     except BaseException:
         if result is not None:
             result.close()
@@ -647,6 +816,7 @@ class DiffResult:
         self._workspace = None
         self._connection = None
         self._summary_value = None
+        self._sources = None
         self._started = False
 
     def _open_workspace(self) -> None:
@@ -780,14 +950,33 @@ class DiffResult:
         # SQLite resolves identity matching over the primary key, so only
         # changed rows reach Python.
         rows = self._connection.execute(_CHANGE_QUERIES[requested])
+        bodies = None
+        if self.config.field_diff and requested in (None, ChangeOperation.MODIFIED):
+            bodies = zip(
+                self._connection.execute(_FIELD_BODIES_QUERY, (0,)),
+                self._connection.execute(_FIELD_BODIES_QUERY, (1,)),
+            )
         for identity, old_line, new_line in rows:
+            patch = None
             if old_line is None:
                 change_operation = ChangeOperation.ADDED
             elif new_line is None:
                 change_operation = ChangeOperation.DELETED
             else:
                 change_operation = ChangeOperation.MODIFIED
-            yield self._change(change_operation, identity, old_line, new_line)
+                if bodies is not None:
+                    patch = self._patch(identity, next(bodies, None))
+            yield self._change(change_operation, identity, old_line, new_line, patch)
+
+    @staticmethod
+    def _patch(identity: bytes, bodies: Any) -> Tuple[FieldChange, ...]:
+        if bodies is None or bodies[0][0] != identity or bodies[1][0] != identity:
+            raise RuntimeError("field bodies are out of step with modified identities")
+        return tuple(_field_patch(bodies[0][1], bodies[1][1]))
+
+    def _field_counter(self) -> _FieldCounter:
+        # Only the details writer calls this, after iterators that reject closed results.
+        return _FieldCounter(self._connection)
 
     def schema_changes(
         self,
@@ -895,8 +1084,8 @@ class DiffResult:
             """,
         )
         for side, identity, selected_line, discarded_line, content_equal in rows:
-            source = "OLD" if side == 0 else "NEW"
-            key = tuple(_decode_json(identity.decode(utf8)))
+            source = _SIDE_NAMES[side]
+            key = tuple(_INPUT_DECODER.decode(identity))
             yield Duplicate(
                 key,
                 SourceLocation(source, selected_line),
@@ -910,13 +1099,15 @@ class DiffResult:
         identity: bytes,
         old_line: Optional[int],
         new_line: Optional[int],
+        patch: Optional[Tuple[FieldChange, ...]] = None,
     ) -> Change:
-        key = tuple(_decode_json(identity.decode(utf8)))
+        key = tuple(_INPUT_DECODER.decode(identity))
         return Change(
             operation,
             key,
             None if old_line is None else SourceLocation("OLD", old_line),
             None if new_line is None else SourceLocation("NEW", new_line),
+            patch,
         )
 
     def close(self):
@@ -947,6 +1138,8 @@ class DiffResult:
         try:
             self._index_parallel()
             self._summary_value = self._calculate_summary()
+            if self.config.field_diff:
+                self._store_field_bodies()
             return self
         except BaseException:
             self.close()
@@ -1086,7 +1279,7 @@ class DiffResult:
                         "SELECT line FROM records WHERE side = ? AND identity = ?",
                         (row[0], row[1]),
                     ).fetchone()[0]
-                    key = tuple(_decode_json(row[1].decode(utf8)))
+                    key = tuple(_INPUT_DECODER.decode(row[1]))
                     raise DuplicateKeyError(key, source, (first, row[2])) from error
             pending.clear()
         except sqlite3.DatabaseError as error:
@@ -1132,8 +1325,29 @@ class DiffResult:
             )
             fields.clear()
 
+    def _index_into(self, db_path: str, source: Any, side: int) -> None:
+        """Index one side into the private database at `db_path` (worker entry point)."""
+        self._open_connection(db_path)
+        self._index(source, side)
+        self._connection.commit()
+
     def _index(self, source: Any, side: int):
-        name = "OLD" if side == 0 else "NEW"
+        name = _SIDE_NAMES[side]
+        self._read_source(
+            lambda on_error: _records(source, on_error, self.config.format),
+            lambda records: self._insert_records(records, side, name),
+            name,
+            "could not build the temporary index",
+        )
+
+    def _read_source(
+        self,
+        read: Callable[[Callable[[int, Exception], None]], Iterator[Any]],
+        consume: Callable[[Iterator[Any]], None],
+        name: str,
+        sqlite_message: str,
+    ) -> None:
+        """Consume a source in one transaction, mapping failures to public errors."""
         error_line = [None]
 
         def on_error(line: int, error: Exception):
@@ -1142,16 +1356,15 @@ class DiffResult:
         try:
             # Close the reader even when a batch fails mid-stream: a suspended
             # generator keeps the input open, and Windows cannot then remove it.
-            with self._connection, contextlib.closing(_records(source, on_error, self.config.format)) as records:
-                self._insert_records(records, side, name)
+            with self._connection, contextlib.closing(read(on_error)) as items:
+                consume(items)
         except JsonlDiffError:
             raise
-        except (OSError, EOFError, ValueError, RuntimeError, ijson.JSONError) as error:
-            line = error_line[0]
+        except _READ_ERRORS as error:
             message = "invalid input ({})".format(type(error).__name__)
-            raise InputError(message, name, line) from error
+            raise InputError(message, name, error_line[0]) from error
         except sqlite3.DatabaseError as error:
-            raise ResourceError("could not build the temporary index") from error
+            raise ResourceError(sqlite_message) from error
 
     def _index_parallel(self) -> None:
         context = _multiprocessing_context()
@@ -1167,6 +1380,8 @@ class DiffResult:
             self._parallel_source(source, side)
             for side, source in enumerate((self._old, self._new))
         ]
+        # Staged paths stay reopenable after indexing for the field-diff reread.
+        self._sources = sources
         # `fork` inherits the compiled `--where` expression and every other
         # start method pickles it; either way the worker gets the config as it
         # stands here.
@@ -1213,7 +1428,7 @@ class DiffResult:
             return os.fspath(source)
 
         path = os.path.join(self._workspace.name, "input{}".format(side))
-        name = "OLD" if side == 0 else "NEW"
+        name = _SIDE_NAMES[side]
         try:
             with open(path, "wb") as destination:
                 self._copy_parallel_source(source, destination, name)
@@ -1325,6 +1540,85 @@ class DiffResult:
             requiredness_changed=counts[SchemaChangeOperation.REQUIREDNESS_CHANGED],
         )
 
+    def _store_field_bodies(self) -> None:
+        """
+        Keep the canonical OLD and NEW bodies of every modified identity.
+
+        The index holds only fingerprints, so field patches need the contents
+        again. Each source is reread sequentially and only the modified lines
+        are decoded. Every body must reproduce its indexed fingerprint: a
+        source that changed between passes fails here, before any output.
+        """
+        message = "could not write the temporary index"
+        with _sqlite_resource(message):
+            # A rowid table appends bodies in physical-line order; one index
+            # built afterward serves the identity-ordered reads. Large bodies
+            # inserted out of key order into a WITHOUT ROWID table cost
+            # ~1.6x more in total, growing with the share of modified records.
+            self._connection.execute(
+                """
+                CREATE TABLE field_bodies (
+                    side INTEGER NOT NULL,
+                    identity BLOB NOT NULL,
+                    body BLOB NOT NULL
+                )
+                """,
+            )
+        if not self._summary_value.modified:
+            return
+        with _sqlite_resource(message):
+            self._connection.execute(_FIELD_LINES_QUERY)
+        for side, source in enumerate(self._sources):
+            self._store_side_bodies(source, side)
+        with _sqlite_resource(message), self._connection:
+            self._connection.execute("DROP TABLE field_lines")
+            self._connection.execute("CREATE UNIQUE INDEX field_bodies_identity ON field_bodies (side, identity)")
+
+    def _store_side_bodies(self, source: str, side: int) -> None:
+        name = _SIDE_NAMES[side]
+        input_format = self.config.format
+        # Undecoded JSONL lines keep the reread cheap: only modified lines are
+        # parsed. Top-level array items already arrive decoded.
+        parse = _INPUT_DECODER.decode if input_format == "jsonl" else None
+        self._read_source(
+            lambda on_error: _records(source, on_error, input_format, decode=_passthrough),
+            lambda items: self._insert_field_bodies(items, side, name, parse),
+            name,
+            "could not write the temporary index",
+        )
+
+    def _insert_field_bodies(
+        self,
+        items: Iterable[Any],
+        side: int,
+        name: str,
+        parse: Optional[Callable[[str], Any]],
+    ) -> None:
+        wanted = self._connection.execute(_SIDE_LINES_QUERIES[side])
+        cursor = self._connection.cursor()
+        pending = []
+        target = next(wanted)
+        for line, item in enumerate(items, start=1):
+            if line != target[0]:
+                continue
+            try:
+                record = item if parse is None else parse(item)
+                canonical = _canonical(_remove_ignored(record, self._ignore_tree))
+            except (TypeError, ValueError):
+                canonical = None
+            if canonical is None or _fingerprint(canonical) != (target[2], target[3]):
+                raise InputError("source changed during comparison", name, line)
+            pending.append((side, target[1], canonical))
+            if len(pending) >= _INSERT_BATCH:
+                cursor.executemany(_FIELD_BODIES_INSERT, pending)
+                pending.clear()
+            target = next(wanted, None)
+            if target is None:
+                break
+        if target is not None:
+            raise InputError("source changed during comparison", name)
+        cursor.executemany(_FIELD_BODIES_INSERT, pending)
+
 
 def _configuration(
     key: Union[str, Sequence[str]],
@@ -1335,6 +1629,7 @@ def _configuration(
     schema_ignore: Sequence[str],
     input_format: str,
     missing_key: Union[str, MissingKeyPolicy] = MissingKeyPolicy.ERROR,
+    field_diff: bool = False,
 ) -> DiffConfig:
     keys = (key,) if isinstance(key, str) else tuple(key)
     if not keys or any(not isinstance(name, str) or not name for name in keys):
@@ -1373,6 +1668,7 @@ def _configuration(
         schema_diff=schema_diff,
         schema_ignore=schema_ignores,
         format=input_format,
+        field_diff=bool(field_diff),
     )
 
 
@@ -1388,6 +1684,7 @@ def diff(
     schema_diff: bool = False,
     schema_ignore: Sequence[str] = (),
     format: str = "jsonl",  # noqa: A002
+    field_diff: bool = False,
 ) -> DiffResult:
     """Create a context-managed, disk-backed comparison."""
     config = _configuration(
@@ -1399,8 +1696,19 @@ def diff(
         schema_ignore,
         format,
         missing_key,
+        field_diff,
     )
     return DiffResult(old, new, config)
+
+
+def _field_change_dict(change: FieldChange) -> Dict[str, Any]:
+    op = FieldOperation(change.op)
+    result = {"op": op.value, "path": change.path}
+    if op is not FieldOperation.ADD:
+        result["old"] = change.old
+    if op is not FieldOperation.REMOVE:
+        result["value"] = change.value
+    return result
 
 
 def _change_dict(change: Change) -> Dict[str, Any]:
@@ -1413,6 +1721,8 @@ def _change_dict(change: Change) -> Dict[str, Any]:
         result["old_line"] = change.old_line
     if change.new_line is not None:
         result["new_line"] = change.new_line
+    if change.patch is not None:
+        result["patch"] = [_field_change_dict(field_change) for field_change in change.patch]
     return result
 
 
@@ -1493,6 +1803,8 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]):
         if result.config.schema_diff:
             metadata["schema_diff"] = True
             metadata["schema_ignore"] = list(result.config.schema_ignore)
+        if result.config.field_diff:
+            metadata["field_diff"] = True
         yield metadata
 
         if result.config.schema_diff:
@@ -1502,8 +1814,21 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]):
         for duplicate in result.duplicates():
             yield _duplicate_dict(duplicate)
 
+        counter = result._field_counter() if result.config.field_diff else None
         for change in result.changes():
+            if change.patch is not None:
+                counter.add(change.patch)
             yield _change_dict(change)
+
+        if counter is not None:
+            for field_path, added, removed, replaced in counter.totals():
+                yield {
+                    "type": "field_summary",
+                    "path": field_path,
+                    "added": added,
+                    "removed": removed,
+                    "replaced": replaced,
+                }
 
         summary = {
             "type": "summary",
@@ -1553,6 +1878,7 @@ def _parser() -> argparse.ArgumentParser:
         default=MissingKeyPolicy.ERROR.value,
     )
     parser.add_argument("--details", metavar="FILE")
+    parser.add_argument("--field-diff", action="store_true")
     parser.add_argument("--schema-diff", action="store_true")
     parser.add_argument("--schema-ignore", action="append", default=[], metavar="POINTER")
     parser.add_argument("--quiet", action="store_true")
@@ -1572,6 +1898,7 @@ def _run_comparison(arguments: argparse.Namespace, old: Any, new: Any, keys: Tup
         schema_diff=arguments.schema_diff,
         schema_ignore=arguments.schema_ignore,
         format=arguments.format,
+        field_diff=arguments.field_diff,
     ) as result:
         if arguments.details:
             _write_details(result, arguments.details)
@@ -1590,6 +1917,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error("OLD and NEW cannot both read from stdin")
     if arguments.schema_ignore and not arguments.schema_diff:
         parser.error("--schema-ignore requires --schema-diff")
+    if arguments.field_diff and arguments.details is None:
+        parser.error("--field-diff requires --details")
     if arguments.details is not None:
         for label, source in (("OLD", arguments.old), ("NEW", arguments.new)):
             if source != "-" and _same_file(arguments.details, source):

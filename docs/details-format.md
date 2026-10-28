@@ -32,7 +32,8 @@ containing changed identity `2` and added identity `3`, the file is:
   `duplicates` records the duplicate policy once for the whole report;
   `missing_key` records how absent identity fields are handled. With
   `--schema-diff`, the record also contains `schema_diff: true` and the
-  normalized `schema_ignore` pointers.
+  normalized `schema_ignore` pointers. With `--field-diff`, it contains
+  `field_diff: true`.
 - **`schema_change`**: emitted only with `--schema-diff`, ordered by RFC 6901
   path and operation before duplicate and record changes. `op` is
   `field_added`, `field_removed`, `types_changed`, `nullability_changed`, or
@@ -51,7 +52,12 @@ containing changed identity `2` and added identity `3`, the file is:
   emitted. `key` contains the identity values as JSON values, including
   objects and arrays; object member order is canonicalized and array order is
   preserved. Numeric keys retain their parsed representation and use
-  `msgspec` JSON notation, including uppercase `E` for exponents.
+  `msgspec` JSON notation, including uppercase `E` for exponents. With
+  `--field-diff`, modified changes also contain a `patch` (see
+  [Field-level patches](#field-level-patches)).
+- **`field_summary`**: emitted only with `--field-diff`, one per changed
+  field path, ordered by path, after `change` records and before `summary`.
+  `added`, `removed`, and `replaced` count the patch operations on that path.
 - **`summary`**: always last after a successful write, with the four
   reconciliation totals plus `old_duplicates` and `new_duplicates`. Duplicate
   totals count additional occurrences, so an identity appearing three times
@@ -75,6 +81,35 @@ Schema events precede duplicate and record changes:
 {"new":{"missing":0,"nulls":0,"parent_objects":2,"present":2,"types":{"string":2}},"op":"field_added","path":"/country","type":"schema_change"}
 {"added":0,"deleted":0,"equal":0,"modified":2,"new_duplicates":0,"old_duplicates":0,"schema":{"fields_added":1,"fields_removed":0,"nullability_changed":0,"requiredness_changed":0,"types_changed":1},"type":"summary"}
 ```
+
+## Field-level patches
+
+`--field-diff` (requires `--details`) adds an [RFC 6902](https://www.rfc-editor.org/rfc/rfc6902)
+JSON Patch turning the OLD record into the NEW one to every modified change:
+
+```bash
+jsonl-diff old.jsonl new.jsonl --key id --details changes.jsonl --field-diff
+```
+
+```jsonl
+{"duplicates":"error","field_diff":true,"ignore":[],"key":["id"],"missing_key":"error","type":"meta","where":null}
+{"key":[1],"new_line":1,"old_line":1,"op":"modified","patch":[{"old":30,"op":"replace","path":"/age","value":31},{"old":"x","op":"remove","path":"/legacy"},{"op":"add","path":"/tags","value":["a"]}],"type":"change"}
+{"added":0,"path":"/age","removed":0,"replaced":1,"type":"field_summary"}
+{"added":0,"path":"/legacy","removed":1,"replaced":0,"type":"field_summary"}
+{"added":1,"path":"/tags","removed":0,"replaced":0,"type":"field_summary"}
+{"added":0,"deleted":0,"equal":0,"modified":1,"new_duplicates":0,"old_duplicates":0,"type":"summary"}
+```
+
+- Operations are `add`, `remove`, and `replace`, depth first in member-name
+  order; `path` is an RFC 6901 pointer. `value` is the NEW value and `old` the
+  OLD one (extra members are ignored by RFC 6902 appliers).
+- Objects are compared recursively; arrays are replaced as a whole.
+- Comparison is representation-sensitive: `1` → `1.0` is a `replace`.
+- Fields excluded with `--ignore` never appear.
+
+Patches require rereading the modified lines after indexing (see
+[architecture](architecture.md#field-diff-reread)); if an input changed
+meanwhile, the run fails with exit code `2`.
 
 ## Querying a report
 
@@ -106,7 +141,7 @@ jq -s 'map(select(.type == "change" and .op == "added")) | length' report.jsonl
 
 Options that change which records are compared or how they are compared
 (`--key`, `--ignore`, `--where`, `--duplicates`, `--missing-key`,
-`--schema-ignore`, `--format`) produce a different report and require a new
+`--schema-ignore`, `--format`, `--field-diff`) produce a different report and require a new
 run; the `meta` record states the configuration a report was produced with.
 
 ## Notes

@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* **Added:** `--field-diff` (requires `--details`) and `diff(..., field_diff=True)` add an RFC 6902 `patch` to modified changes and per-path `field_summary` records (`Change.patch`, `FieldChange`, `FieldOperation`).
+* **Braking-Changed:** Python API keys return JSON integers as `int` instead of `Decimal`; they compare and hash equal, and details output is unchanged.
+
 ## v0.2.3
 
 * **Changed:** Refresh `uv.lock` updating dev/docs dependencies. Runtime dependency constraints are unchanged.

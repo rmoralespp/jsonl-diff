@@ -171,6 +171,9 @@ comparison. `msgspec` writes `Decimal` values as JSON numbers and preserves
 their parsed scale/exponent representation without expanding a large exponent
 into a large string of zeroes.
 
+Field-level patches apply the same rules per field; see
+[Field-level patches](details-format.md#field-level-patches).
+
 ## Determinism
 
 Summary counts do not depend on either source's physical record order.
