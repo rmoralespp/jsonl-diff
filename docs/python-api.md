@@ -20,11 +20,12 @@ with diff(
         schema_diff=True,
         schema_ignore=("/metadata",),
         format="jsonl",
+        field_diff=True,
 ) as result:
     print(result.summary)
 
     for change in result.changes(ChangeOperation.MODIFIED):
-        print(change.key, change.old_line, change.new_line)
+        print(change.key, change.old_line, change.new_line, change.patch)
 
     for change in result.schema_changes():
         print(change.operation, change.path)
@@ -117,7 +118,9 @@ Each item from `result.changes()` is an immutable `Change` with:
 - `key`: a typed tuple in normalized identity-field order;
 - `old` and `new`: optional `SourceLocation` values;
 - `old_line` and `new_line`: convenience properties returning a one-based
-  physical line or `None`.
+  physical line or `None`;
+- `patch`: field-level changes for modified records with `field_diff=True`,
+  otherwise `None`.
 
 For additions, `old`/`old_line` are `None`; for deletions, `new`/`new_line` are
 `None`; modifications have both locations. Location sources are labeled `OLD`
@@ -195,7 +198,8 @@ compare equal in Python.
 The public error hierarchy starts with `JsonlDiffError`:
 
 - `ConfigurationError`: invalid keys, ignore pointers, or schema options;
-- `InputError`: an invalid source or record; exposes `source` and optional `line`;
+- `InputError`: an invalid source or record, or a source changed during a
+  field-diff reread; exposes `source` and optional `line`;
 - `DuplicateKeyError`: an `InputError` with `key` and the first/repeated physical lines in `lines`;
 - `ResourceError`: the temporary index cannot be created or written.
 

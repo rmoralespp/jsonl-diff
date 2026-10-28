@@ -115,11 +115,11 @@ meanwhile, the run fails with exit code `2`.
 
 Every invocation indexes both inputs, and indexing dominates the cost of a
 comparison. Since a details file already contains the summary, schema changes
-(with `--schema-diff`), duplicates, and record changes, one run can replace
-several:
+(with `--schema-diff`), duplicates, record changes, and field patches (with
+`--field-diff`), one run can replace several:
 
 ```bash
-jsonl-diff old.jsonl new.jsonl --key id --schema-diff --details report.jsonl --quiet
+jsonl-diff old.jsonl new.jsonl --key id --schema-diff --details report.jsonl --field-diff --quiet
 ```
 
 The report is plain JSONL, so any line-oriented tool can query it without
@@ -137,11 +137,14 @@ jq -c 'select(.type == "change" and .op == "modified") | .key' report.jsonl
 
 # Number of added records
 jq -s 'map(select(.type == "change" and .op == "added")) | length' report.jsonl
+
+# Fields that changed most often
+jq -c 'select(.type == "field_summary")' report.jsonl
 ```
 
-Options that change which records are compared or how they are compared
-(`--key`, `--ignore`, `--where`, `--duplicates`, `--missing-key`,
-`--schema-ignore`, `--format`, `--field-diff`) produce a different report and require a new
+Options that change which records are compared, how they are compared, or
+what the report contains (`--key`, `--ignore`, `--where`, `--duplicates`,
+`--missing-key`, `--schema-ignore`, `--format`, `--field-diff`) require a new
 run; the `meta` record states the configuration a report was produced with.
 
 ## Notes
