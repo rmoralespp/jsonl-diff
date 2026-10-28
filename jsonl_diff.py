@@ -746,10 +746,10 @@ def _records(
     """Iterate source records; `decode` applies to JSONL lines only, arrays arrive decoded."""
     if input_format == "json":
         yield from _array_records(source)
-        return
-    # Non-integer numbers become Decimal while integers stay native `int`,
-    # preserving their parsed representation. Duplicate keys use last-wins.
-    yield from jsonl.load(source, cls=decode, _on_error=on_error)
+    else:
+        # Non-integer numbers become Decimal while integers stay native `int`, preserving their parsed representation.
+        # Duplicate keys use last-wins.
+        yield from jsonl.load(source, cls=decode, _on_error=on_error)
 
 
 def _multiprocessing_context() -> Any:
@@ -776,9 +776,7 @@ def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") ->
     result = None
     try:
         result = DiffResult(source, source, config)
-        result._open_connection(db_path)
-        result._index(source, side)
-        result._connection.commit()
+        result._index_into(db_path, source, side)
     except BaseException:
         if result is not None:
             result.close()
@@ -1341,6 +1339,12 @@ class DiffResult:
             )
             fields.clear()
 
+    def _index_into(self, db_path: str, source: Any, side: int) -> None:
+        """Index one side into the private database at `db_path` (worker entry point)."""
+        self._open_connection(db_path)
+        self._index(source, side)
+        self._connection.commit()
+
     def _index(self, source: Any, side: int):
         name = _SIDE_NAMES[side]
         self._read_source(
@@ -1562,7 +1566,7 @@ class DiffResult:
         message = "could not write the temporary index"
         with _sqlite_resource(message):
             # A rowid table appends bodies in physical-line order; one index
-            # built afterwards serves the identity-ordered reads. Large bodies
+            # built afterward serves the identity-ordered reads. Large bodies
             # inserted out of key order into a WITHOUT ROWID table cost
             # ~1.6x more in total, growing with the share of modified records.
             self._connection.execute(
