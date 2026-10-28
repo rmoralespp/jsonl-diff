@@ -198,11 +198,13 @@ commands, request them together and query the details file afterwards:
 jsonl-diff old.jsonl new.jsonl \
   --key id \
   --schema-diff \
-  --details report.jsonl
+  --details report.jsonl \
+  --field-diff
 
 # Later queries read report.jsonl instead of re-indexing the inputs.
 jq -c 'select(.type == "schema_change")' report.jsonl
 jq -c 'select(.type == "change" and .op == "modified")' report.jsonl
+jq -c 'select(.type == "field_summary")' report.jsonl
 jq -c 'select(.type == "summary")' report.jsonl
 ```
 
@@ -243,11 +245,14 @@ def main():
             ignore=("/updated_at",),
             where='country == `"ES"`',
             schema_diff=True,
+            field_diff=True,
     ) as result:
         print(result.summary)
 
         for change in result.changes(ChangeOperation.MODIFIED):
             print(change.key, change.old_line, change.new_line)
+            for field in change.patch:
+                print(" ", field.op, field.path, field.old, field.value)
 
         for change in result.schema_changes():
             print(change.operation, change.path)
@@ -270,6 +275,7 @@ The immutable result models include:
 
 - `Summary` and `SchemaSummary`
 - `Change` and `SourceLocation`
+- `FieldChange` and `FieldOperation` (with `field_diff=True`)
 - `Duplicate`
 - `SchemaChange` and `SchemaFieldProfile`
 
