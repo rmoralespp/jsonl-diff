@@ -454,7 +454,7 @@ wheels = [
 
 [[package]]
 name = "jsonl-diff"
-version = "0.2.3"
+version = "0.3.1"
 source = { editable = "." }
 dependencies = [
     { name = "ijson" },
