@@ -15,7 +15,9 @@ databases into the final index used for comparison. See
 handling.
 
 The index stores the typed canonical identity, original line, content length,
-and SHA-256 digest; the full canonical bytes are not persisted. A uniqueness
+and SHA-256 digest; the full canonical bytes are not persisted, except for
+modified records when field diff is enabled (see
+[Field-diff reread](#field-diff-reread)). A uniqueness
 constraint detects duplicate identities. When `first` or `last` tolerates a
 collision, a second table stores the discarded occurrence's identity, physical
 line, canonical length, and digest. SQL joins calculate the summary, and
@@ -33,7 +35,7 @@ digest index remains until the `DiffResult` is closed, so temporary usage
 scales with the number of selected records plus tolerated duplicate
 occurrences rather than the combined input size for path and URL sources.
 File-like objects and stdin are first copied into the workspace so both workers
-can reopen them, so those sources temporarily require their full encoded size
+and the field-diff reread can reopen them, so those sources temporarily require their full encoded size
 in addition to the indexes. Duplicate diagnostics compare stored fingerprints
 and do not require retaining or rereading full records.
 
@@ -56,6 +58,36 @@ Schema profiling happens during the original input pass and does not retain
 complete records or reread a source. It therefore works with stdin, remote,
 and compressed sources. Nested objects are traversed iteratively. Arrays are
 profiled as terminal `array` values; their elements are not inferred.
+
+## Field-diff reread
+
+The index stores fingerprints rather than records, so `field_diff=True` /
+`--field-diff` adds a sequential pass after the summary is computed. For each
+side, SQLite lists the modified rows in physical-line order; the source is
+reread from the start, only those lines are decoded, `--ignore` is applied, and
+the canonical body must reproduce the indexed length and SHA-256 digest. A
+mismatch, a missing line, or an unreadable source fails the context entry with
+`InputError` (`source changed during comparison`) before any result or details
+file is produced.
+
+Verified canonical bodies are appended to a `field_bodies` table in physical
+order and indexed by side and identity once both sides are stored.
+`changes()` reads both sides in identity order alongside the
+change query and computes each patch lazily, so patches are never held in
+memory together. Every member of a canonical body is itself canonical, so the
+patch walker splits objects into undecoded members, compares them as bytes, and
+decodes only the values that changed. Extra disk usage is about twice the canonical size of the
+modified records. The details writer pre-aggregates `field_summary` totals
+for at most one insert batch of distinct paths and merges them into a
+`field_counts` table keyed by path, whose primary-key order also yields the
+sorted output. Stable schemas never leave memory, while dynamic property names
+(for example, objects keyed by ID) spill to disk instead of growing RAM.
+
+The reread decodes only modified lines, but every line still has to be read and
+split, and compressed sources are decompressed again; `--format json` sources
+are fully reparsed by `ijson`. Staged stdin and file-like inputs are reread
+from the workspace copy; URLs are downloaded again. Without `field_diff`
+nothing is reread and no extra table is created.
 
 ## Cleanup
 

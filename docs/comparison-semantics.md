@@ -171,9 +171,16 @@ comparison. `msgspec` writes `Decimal` values as JSON numbers and preserves
 their parsed scale/exponent representation without expanding a large exponent
 into a large string of zeroes.
 
+Field-level patches (`--field-diff`) apply the same rules per field: a `1` →
+`1.0` change is a `replace`, member order never produces an operation, and
+arrays are compared as whole values. See
+[Details format → Field-level patches](details-format.md#field-level-patches).
+
 ## Determinism
 
 Summary counts do not depend on either source's physical record order.
 Changes, including details records, use the stable lexical byte order of each
 canonical typed identity. This is a reproducibility guarantee, not numeric,
-locale-aware, or human-oriented sorting.
+locale-aware, or human-oriented sorting. Field-diff patches list operations
+depth first in member-name order, and `field_summary` records are sorted by
+path, so repeated runs produce identical reports.

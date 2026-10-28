@@ -1,3 +1,4 @@
+import sqlite3
 from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
@@ -8,10 +9,12 @@ from jsonl_diff import (
     ChangeOperation,
     ConfigurationError,
     DiffConfig,
+    DiffResult,
     DuplicateKeyError,
     DuplicatePolicy,
     InputError,
     MissingKeyPolicy,
+    ResourceError,
     SchemaChangeOperation,
     SchemaSummary,
     Summary,
@@ -1420,4 +1423,256 @@ class TestChanges:
         # Act / Assert
         with pytest.raises(RuntimeError, match="cannot be entered more than once"):
             with result:
+                pass
+
+
+class TestFieldDiff:
+    @pytest.mark.parametrize(
+        "old_line,new_line,expected",
+        [
+            ('{"id":1,"v":1}', '{"id":1,"v":1.0}', [("replace", "/v", 1, Decimal("1.0"))]),
+            ('{"id":1,"v":1.0}', '{"id":1,"v":1.00}', [("replace", "/v", Decimal("1.0"), Decimal("1.00"))]),
+            ('{"id":1,"v":1}', '{"id":1,"v":true}', [("replace", "/v", 1, True)]),
+            ('{"id":1,"v":{"a":1,"b":2}}', '{"id":1,"v":{"b":3,"a":1}}', [("replace", "/v/b", 2, 3)]),
+            ('{"id":1,"v":{"a":[1.0]}}', '{"id":1,"v":{"a":[1.00]}}',
+             [("replace", "/v/a", [Decimal("1.0")], [Decimal("1.00")])]),
+            ('{"id":1,"v":[1,2]}', '{"id":1,"v":[2,1]}', [("replace", "/v", [1, 2], [2, 1])]),
+            ('{"id":1,"gone":null}', '{"id":1,"new":null}',
+             [("remove", "/gone", None, None), ("add", "/new", None, None)]),
+            ('{"id":1,"a/b":1,"c~d":1}', '{"id":1,"a/b":2,"c~d":2}',
+             [("replace", "/a~1b", 1, 2), ("replace", "/c~0d", 1, 2)]),
+            ('{"id":1,"v":{"a":1}}', '{"id":1,"v":"x"}', [("replace", "/v", {"a": 1}, "x")]),
+            ('{"id":1,"n":{"a":1.0},"v":1}', '{"id":1,"n":{"a":1.0},"v":2}', [("replace", "/v", 1, 2)]),
+        ],
+    )
+    def test_patch_lists_representation_sensitive_field_operations(self, write_jsonl, old_line, new_line, expected):
+        # Arrange
+        old = write_jsonl("old.jsonl", [old_line])
+        new = write_jsonl("new.jsonl", [new_line])
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            (change,) = result.changes()
+
+        # Assert
+        assert [(item.op, item.path, item.old, item.value) for item in change.patch] == expected
+
+    def test_patch_supports_nesting_deeper_than_the_recursion_limit(self, write_jsonl):
+        # Arrange
+        depth = 1200
+        old = write_jsonl("old.jsonl", ['{"id":1,"v":' + '{"a":' * depth + "1" + "}" * depth + "}"])
+        new = write_jsonl("new.jsonl", ['{"id":1,"v":' + '{"a":' * depth + "2" + "}" * depth + "}"])
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            (change,) = result.changes()
+
+        # Assert
+        assert [(item.op, item.path, item.old, item.value) for item in change.patch] == [
+            ("replace", "/v" + "/a" * depth, 1, 2),
+        ]
+
+    def test_patch_lists_nested_operations_before_later_siblings(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "a": 1, "b": {"x": 1, "y": {"z": 1}}, "c": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "a": 2, "b": {"x": 2, "y": {"z": 2}}, "c": 2}])
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            (change,) = result.changes()
+
+        # Assert
+        assert [item.path for item in change.patch] == ["/a", "/b/x", "/b/y/z", "/c"]
+
+    def test_patch_excludes_ignored_fields(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "meta": {"at": 1, "by": "a"}, "v": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "meta": {"at": 2, "by": "b"}, "v": 2}])
+
+        # Act
+        with diff(old, new, key="id", ignore=["/meta/at"], field_diff=True) as result:
+            (change,) = result.changes()
+
+        # Assert
+        assert [item.path for item in change.patch] == ["/meta/by", "/v"]
+
+    @pytest.mark.parametrize("operation", [None, ChangeOperation.MODIFIED])
+    def test_patches_follow_identity_order_regardless_of_physical_order(self, write_jsonl, operation):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 3, "v": "o3"}, {"id": 1, "v": "o1"}, {"id": 4}, {"id": 2, "v": "o2"}])
+        new = write_jsonl("new.jsonl", [{"id": 2, "v": "n2"}, {"id": 5}, {"id": 1, "v": "n1"}, {"id": 3, "v": "n3"}])
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            changes = [
+                (change.key[0], None if change.patch is None else change.patch[0].value)
+                for change in result.changes(operation)
+            ]
+
+        # Assert
+        expected = [(1, "n1"), (2, "n2"), (3, "n3"), (4, None), (5, None)]
+        assert changes == (expected if operation is None else expected[:3])
+
+    def test_patch_is_absent_without_field_diff(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": 2}])
+
+        # Act
+        with diff(old, new, key="id") as result:
+            (change,) = result.changes()
+
+        # Assert
+        assert change.patch is None
+
+    def test_patch_uses_the_retained_duplicate(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": "a"}, {"id": 1, "v": "b"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": "c"}])
+
+        # Act
+        with diff(old, new, key="id", duplicates="last", field_diff=True) as result:
+            (change,) = result.changes()
+
+        # Assert
+        assert [(item.old, item.value) for item in change.patch] == [("b", "c")]
+
+    def test_patch_supports_json_array_format(self, tmp_path):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1,"v":1.0},{"id":2}]', encoding="utf-8")
+        new.write_text('[{"id":2},{"id":1,"v":1.00}]', encoding="utf-8")
+
+        # Act
+        with diff(old, new, key="id", format="json", field_diff=True) as result:
+            (change,) = result.changes()
+
+        # Assert
+        assert [(item.op, item.path, item.old, item.value) for item in change.patch] == [
+            ("replace", "/v", Decimal("1.0"), Decimal("1.00")),
+        ]
+
+    @pytest.mark.parametrize(
+        "rewritten",
+        [
+            '{"id":1,"v":"tampered"}\n',
+            '{"id":1,\n',
+            "",
+        ],
+    )
+    def test_source_changed_between_passes_is_rejected(self, write_jsonl, monkeypatch, rewritten):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": "a"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": "b"}])
+        original = DiffResult._store_field_bodies
+
+        def rewrite_then_store(result):
+            old.write_text(rewritten, encoding="utf-8")
+            original(result)
+
+        monkeypatch.setattr(DiffResult, "_store_field_bodies", rewrite_then_store)
+
+        # Act / Assert
+        with pytest.raises(InputError, match="source changed during comparison in OLD"):
+            with diff(old, new, key="id", field_diff=True):
+                pass
+
+    def test_source_removed_between_passes_is_rejected(self, write_jsonl, monkeypatch):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": "a"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": "b"}])
+        original = DiffResult._store_field_bodies
+
+        def remove_then_store(result):
+            new.unlink()
+            original(result)
+
+        monkeypatch.setattr(DiffResult, "_store_field_bodies", remove_then_store)
+
+        # Act / Assert
+        with pytest.raises(InputError, match="invalid input .* in NEW"):
+            with diff(old, new, key="id", field_diff=True):
+                pass
+
+    def test_patches_span_multiple_insert_batches(self, write_jsonl):
+        # Arrange
+        count = 2 * 2048 + 1
+        old = write_jsonl("old.jsonl", [{"id": number, "v": number} for number in range(count)])
+        new = write_jsonl("new.jsonl", [{"id": number, "v": -number - 1} for number in reversed(range(count))])
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            values = {change.key[0]: change.patch[0].value for change in result.changes()}
+
+        # Assert
+        assert values == {number: -number - 1 for number in range(count)}
+
+    def test_comparison_without_modified_records_skips_the_reread(self, write_jsonl, tmp_path):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}, {"id": 2}])
+        new = write_jsonl("new.jsonl", [{"id": 1}, {"id": 3}])
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            old.unlink()
+            changes = [(change.operation, change.patch) for change in result.changes()]
+
+        # Assert
+        assert changes == [(ChangeOperation.DELETED, None), (ChangeOperation.ADDED, None)]
+
+    def test_unreadable_line_during_reread_reports_its_line(self, write_jsonl, monkeypatch):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": "a"}, {"id": 2, "v": "a"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": "a"}, {"id": 2, "v": "b"}])
+        original = DiffResult._store_field_bodies
+
+        def corrupt_then_store(result):
+            old.write_bytes(b'{"id":1,"v":"\xff"}\n{"id":2,"v":"a"}\n')
+            original(result)
+
+        monkeypatch.setattr(DiffResult, "_store_field_bodies", corrupt_then_store)
+
+        # Act / Assert
+        with pytest.raises(InputError, match=r"invalid input \(UnicodeDecodeError\) in OLD at line 1"):
+            with diff(old, new, key="id", field_diff=True):
+                pass
+
+    def test_missing_field_body_is_detected_instead_of_mispairing(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": "a"}, {"id": 2, "v": "a"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": "b"}, {"id": 2, "v": "b"}])
+
+        # Act / Assert
+        with diff(old, new, key="id", field_diff=True) as result:
+            result._connection.execute("DELETE FROM field_bodies WHERE side = 1 AND identity = ?", (b"[1]",))
+            with pytest.raises(RuntimeError, match="out of step"):
+                list(result.changes())
+
+    @pytest.mark.parametrize("failing_step", ["create", "insert", "index"])
+    def test_field_body_storage_failure_is_a_resource_error(self, write_jsonl, monkeypatch, failing_step):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": "a"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": "b"}])
+        original_summary = DiffResult._calculate_summary
+        conflicting = {
+            "create": "CREATE TABLE field_bodies (x)",
+            "index": "CREATE INDEX field_bodies_identity ON records (line)",
+        }
+
+        def summary_with_conflicting_object(result):
+            result._connection.execute(conflicting[failing_step])
+            return original_summary(result)
+
+        def failing_insert(*args):
+            raise sqlite3.OperationalError("disk full")
+
+        if failing_step == "insert":
+            monkeypatch.setattr(DiffResult, "_insert_field_bodies", failing_insert)
+        else:
+            monkeypatch.setattr(DiffResult, "_calculate_summary", summary_with_conflicting_object)
+
+        # Act / Assert
+        with pytest.raises(ResourceError, match="could not write the temporary index"):
+            with diff(old, new, key="id", field_diff=True):
                 pass

@@ -36,7 +36,8 @@ The parent therefore copies those sources into the private workspace before
 starting the workers.
 
 This staging keeps stream support consistent across multiprocessing start
-methods and gives the error-recovery pass a complete source to reread. It also
+methods and gives the error-recovery pass and the field-diff reread a complete
+source to reread. It also
 means stream inputs require temporary space for both their encoded content and
 their SQLite indexes. These files are removed with the workspace.
 

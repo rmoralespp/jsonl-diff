@@ -50,6 +50,7 @@ def diff(
         schema_diff: bool = False,
         schema_ignore: Sequence[str] = (),
         format: str = "jsonl",
+        field_diff: bool = False,
 ) -> DiffResult:
     ...
 ```
@@ -121,6 +122,29 @@ Each item from `result.changes()` is an immutable `Change` with:
 For additions, `old`/`old_line` are `None`; for deletions, `new`/`new_line` are
 `None`; modifications have both locations. Location sources are labeled `OLD`
 and `NEW`.
+
+`Change.patch` is `None` unless `field_diff=True`, in which case every
+modified change carries a non-empty tuple of immutable `FieldChange` values
+(added and deleted changes keep `patch=None`):
+
+- `op`: a `FieldOperation` (`ADD`, `REMOVE`, or `REPLACE`, a `str` enum whose
+  values are the RFC 6902 names `"add"`, `"remove"`, `"replace"`);
+- `path`: an RFC 6901 pointer;
+- `old`: the OLD value, meaningful for `remove` and `replace`;
+- `value`: the NEW value, meaningful for `add` and `replace`.
+
+Objects are compared recursively and arrays atomically; values keep their
+parsed types (`int`, `Decimal`, …). Because values may be lists or dicts, a
+`Change` with a patch is not necessarily hashable. Entering the context rereads the modified
+lines of both sources and fails with `InputError` if a source changed after
+indexing. See [Details format → Field-level patches](details-format.md#field-level-patches).
+
+```python
+with diff("old.jsonl", "new.jsonl", key="id", field_diff=True) as result:
+    for change in result.changes(ChangeOperation.MODIFIED):
+        for field in change.patch:
+            print(change.key, field.op, field.path, field.old, field.value)
+```
 
 Pass a `ChangeOperation` to filter without materializing all changes:
 
