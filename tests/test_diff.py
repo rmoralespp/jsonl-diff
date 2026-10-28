@@ -1,4 +1,5 @@
 import sqlite3
+import sys
 from collections.abc import Iterator
 from decimal import Decimal
 from pathlib import Path
@@ -1457,6 +1458,10 @@ class TestFieldDiff:
         # Assert
         assert [(item.op, item.path, item.old, item.value) for item in change.patch] == expected
 
+    @pytest.mark.skipif(
+        sys.version_info < (3, 12),
+        reason="before 3.12, msgspec decoding shares the Python recursion limit, so indexing rejects this depth",
+    )
     def test_patch_supports_nesting_deeper_than_the_recursion_limit(self, write_jsonl):
         # Arrange
         depth = 1200
