@@ -193,13 +193,15 @@ with diff("old.jsonl", "new.jsonl", key="id", schema_diff=True) as result:
 Schema iteration requires an open result and raises `RuntimeError` when schema
 diff was not enabled. Schema summary values remain available after closing.
 
-With numeric keys, API key components are `decimal.Decimal` values. For
-example, JSON identity `7` is returned as `Decimal("7")`; JSON strings,
-booleans, objects, and arrays retain their JSON types. Object member order is
-canonicalized recursively, while array element order remains significant.
-Decimal scale and exponent representation remain significant for identity:
-`Decimal("1")` and `Decimal("1.0")` identify different records. Details JSONL
-writes identity values as JSON values, including arbitrary-precision numbers.
+With numeric keys, API key components use the same types as parsed record
+values: JSON integers are `int` and other numbers are `decimal.Decimal`. For
+example, JSON identity `7` is returned as `7` and `1.50` as `Decimal("1.50")`;
+JSON strings, booleans, objects, and arrays retain their JSON types. Object
+member order is canonicalized recursively, while array element order remains
+significant. Number representation remains significant for identity: `1`,
+`1.0`, and `1.00` identify different records even though they compare equal in
+Python. Details JSONL writes identity values as JSON values, including
+arbitrary-precision numbers.
 
 ## API errors
 

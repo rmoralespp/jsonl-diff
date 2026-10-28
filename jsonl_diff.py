@@ -3,7 +3,6 @@
 import argparse
 import contextlib
 import hashlib
-import json
 import os
 import sqlite3
 import sys
@@ -333,19 +332,6 @@ class Duplicate:
     def discarded_line(self) -> int:
         """Return the physical line discarded by the duplicate policy."""
         return self.discarded.line
-
-
-def _reject_constant(value: str):
-    raise ValueError("invalid JSON number {!r}".format(value))
-
-
-def _decode_json(value: str) -> Any:
-    return json.loads(
-        value,
-        parse_int=Decimal,
-        parse_float=Decimal,
-        parse_constant=_reject_constant,
-    )
 
 
 def _canonical(value: Any) -> bytes:
@@ -1099,7 +1085,7 @@ class DiffResult:
         )
         for side, identity, selected_line, discarded_line, content_equal in rows:
             source = _SIDE_NAMES[side]
-            key = tuple(_decode_json(identity.decode(utf8)))
+            key = tuple(_INPUT_DECODER.decode(identity))
             yield Duplicate(
                 key,
                 SourceLocation(source, selected_line),
@@ -1115,7 +1101,7 @@ class DiffResult:
         new_line: Optional[int],
         patch: Optional[Tuple[FieldChange, ...]] = None,
     ) -> Change:
-        key = tuple(_decode_json(identity.decode(utf8)))
+        key = tuple(_INPUT_DECODER.decode(identity))
         return Change(
             operation,
             key,
@@ -1293,7 +1279,7 @@ class DiffResult:
                         "SELECT line FROM records WHERE side = ? AND identity = ?",
                         (row[0], row[1]),
                     ).fetchone()[0]
-                    key = tuple(_decode_json(row[1].decode(utf8)))
+                    key = tuple(_INPUT_DECODER.decode(row[1]))
                     raise DuplicateKeyError(key, source, (first, row[2])) from error
             pending.clear()
         except sqlite3.DatabaseError as error:

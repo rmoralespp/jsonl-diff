@@ -224,7 +224,22 @@ class TestIdentityKeys:
             change = next(result.changes())
 
         # Assert
-        assert change.key == ("ES", Decimal("7"))
+        assert change.key == ("ES", 7)
+        assert [type(value) for value in change.key] == [str, int]
+
+    def test_key_numbers_use_the_same_types_as_patch_values(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", ['{"id":[7,1.5],"v":1}'])
+        new = write_jsonl("new.jsonl", ['{"id":[7,1.5],"v":2.5}'])
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            change = next(result.changes())
+
+        # Assert
+        (key,) = change.key
+        (field_change,) = change.patch
+        assert [type(value) for value in key] == [type(field_change.old), type(field_change.value)] == [int, Decimal]
 
     def test_composite_key_option_order_does_not_change_identity(self, write_jsonl):
         # Arrange
@@ -238,7 +253,7 @@ class TestIdentityKeys:
             second_change = next(second.changes())
 
         # Assert
-        assert first_change.key == second_change.key == (Decimal("1"), Decimal("2"))
+        assert first_change.key == second_change.key == (1, 2)
 
     @pytest.mark.parametrize(
         "old_key,new_key",
@@ -467,7 +482,7 @@ class TestWhereFiltering:
         # Assert
         assert summary == Summary(equal=1, added=1, deleted=0, modified=0)
         assert changes[0].operation == ChangeOperation.ADDED
-        assert changes[0].key == (Decimal("2"),)
+        assert changes[0].key == (2,)
 
     def test_filtered_records_are_not_reported_as_changes(self, write_jsonl):
         # Arrange
@@ -698,7 +713,7 @@ class TestInputValidation:
             change = next(result.changes())
 
         # Assert
-        assert change.key == (Decimal("1"), None)
+        assert change.key == (1, None)
         assert change.operation == ChangeOperation.MODIFIED
 
     def test_null_component_still_distinguishes_composite_identities(self, write_jsonl):
@@ -748,7 +763,7 @@ class TestInputValidation:
             change = next(result.changes())
 
         # Assert
-        assert change.key == (Decimal("1"), None)
+        assert change.key == (1, None)
         assert change.operation == ChangeOperation.MODIFIED
 
     def test_missing_key_null_policy_still_rejects_single_field_identity(self, write_jsonl):
@@ -828,7 +843,7 @@ class TestInputValidation:
                 pass
 
         # Assert
-        assert captured.value.key == (Decimal(100_000),)
+        assert captured.value.key == (100_000,)
         assert captured.value.lines == (1, span)
         assert captured.value.source == "OLD"
 
@@ -911,7 +926,7 @@ class TestInputValidation:
             )
             for duplicate in duplicates
         ] == [
-            ("OLD", (Decimal("1"),), selected_line, line, content_equal)
+            ("OLD", (1,), selected_line, line, content_equal)
             for line, content_equal in discarded
         ]
 
@@ -1301,14 +1316,14 @@ class TestChanges:
 
         # Assert
         assert [(change.operation, change.key) for change in added] == [
-            (ChangeOperation.ADDED, (Decimal("3"),)),
+            (ChangeOperation.ADDED, (3,)),
         ]
 
     @pytest.mark.parametrize(
         "operation,expected_key",
         [
-            (ChangeOperation.DELETED, (Decimal("1"),)),
-            (ChangeOperation.MODIFIED, (Decimal("2"),)),
+            (ChangeOperation.DELETED, (1,)),
+            (ChangeOperation.MODIFIED, (2,)),
         ],
     )
     def test_changes_filtered_by_operation_return_only_that_operation(
@@ -1336,10 +1351,10 @@ class TestChanges:
 
         # Assert
         assert changes == [
-            ((Decimal("2"),), ChangeOperation.MODIFIED),
-            ((Decimal("3"),), ChangeOperation.ADDED),
-            ((Decimal("4"),), ChangeOperation.DELETED),
-            ((Decimal("5"),), ChangeOperation.ADDED),
+            ((2,), ChangeOperation.MODIFIED),
+            ((3,), ChangeOperation.ADDED),
+            ((4,), ChangeOperation.DELETED),
+            ((5,), ChangeOperation.ADDED),
         ]
 
     def test_changes_have_stable_canonical_order(self, write_jsonl):
