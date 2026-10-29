@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+* **Added:** `DiffResult.field_summary()` yields per-path `FieldSummary(path, added, removed, replaced)` totals across modified records, ordered by path, matching the details `field_summary` records; requires `field_diff=True` (#29).
+
 ## v0.3.1
 
 * **Added:** `--field-diff` (requires `--details`) and `diff(..., field_diff=True)` add an RFC 6902 `patch` to modified changes and per-path `field_summary` records (`Change.patch`, `FieldChange`, `FieldOperation`).

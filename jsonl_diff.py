@@ -288,6 +288,16 @@ class FieldChange:
 
 
 @dataclass(frozen=True)
+class FieldSummary:
+    """Field-level operation totals for one RFC 6901 path across modified records."""
+
+    path: str
+    added: int
+    removed: int
+    replaced: int
+
+
+@dataclass(frozen=True)
 class Change:
     """One added, deleted, or modified identity."""
 
@@ -651,10 +661,9 @@ class _FieldCounter:
         self._connection = connection
         self._pending = {}
         with _sqlite_resource("could not write the temporary index"):
-            connection.execute("DROP TABLE IF EXISTS field_counts")
             connection.execute(
                 """
-                CREATE TABLE field_counts (
+                CREATE TABLE IF NOT EXISTS field_counts (
                     path TEXT PRIMARY KEY,
                     added INTEGER NOT NULL,
                     removed INTEGER NOT NULL,
@@ -662,6 +671,8 @@ class _FieldCounter:
                 ) WITHOUT ROWID
                 """,
             )
+            # DELETE, unlike DROP, is allowed while other cursors are reading.
+            connection.execute("DELETE FROM field_counts")
 
     def add(self, patch: Iterable[FieldChange]) -> None:
         pending = self._pending
@@ -669,17 +680,11 @@ class _FieldCounter:
             counts = pending.get(field_change.path)
             if counts is None:
                 if len(pending) >= _INSERT_BATCH:
-                    self._flush()
+                    self.flush()
                 counts = pending[field_change.path] = [0, 0, 0]
             counts[_FIELD_COUNT_COLUMNS[field_change.op]] += 1
 
-    def totals(self) -> Iterator[Tuple[str, int, int, int]]:
-        """Yield `(path, added, removed, replaced)` in path order."""
-        self._flush()
-        with _sqlite_resource("could not read the temporary index"):
-            yield from self._connection.execute(_FIELD_COUNTS_QUERY)
-
-    def _flush(self) -> None:
+    def flush(self) -> None:
         if self._pending:
             with _sqlite_resource("could not write the temporary index"):
                 self._connection.executemany(
@@ -816,6 +821,8 @@ class DiffResult:
         self._workspace = None
         self._connection = None
         self._summary_value = None
+        self._field_counts_ready = False
+        self._field_counter = None
         self._sources = None
         self._started = False
 
@@ -974,9 +981,39 @@ class DiffResult:
             raise RuntimeError("field bodies are out of step with modified identities")
         return tuple(_field_patch(bodies[0][1], bodies[1][1]))
 
-    def _field_counter(self) -> _FieldCounter:
-        # Only the details writer calls this, after iterators that reject closed results.
-        return _FieldCounter(self._connection)
+    def field_summary(self) -> Iterator[FieldSummary]:
+        """Iterate per-path field operation totals across modified records, ordered by path."""
+        if self._connection is None:
+            raise RuntimeError("the diff result is closed")
+        elif not self.config.field_diff:
+            raise RuntimeError("field diff was not enabled")
+
+        if not self._field_counts_ready:
+            for _ in self._changes_with_field_counts(ChangeOperation.MODIFIED):
+                pass
+        with _sqlite_resource("could not read the temporary index"):
+            for path, added, removed, replaced in self._connection.execute(_FIELD_COUNTS_QUERY):
+                yield FieldSummary(path, added, removed, replaced)
+
+    def _changes_with_field_counts(self, operation: Optional[ChangeOperation] = None) -> Iterator[Change]:
+        """Iterate `changes()` while building `field_counts` once, if field diff needs it."""
+        counter = None
+        if self._connection is None:
+            raise RuntimeError("the diff result is closed")
+        elif self.config.field_diff and not self._field_counts_ready:
+            # Creating a counter resets the table, so it invalidates any
+            # suspended builder; only the active counter may write or finish.
+            counter = self._field_counter = _FieldCounter(self._connection)
+        for change in self.changes(operation):
+            if counter is not None and change.patch is not None:
+                if counter is self._field_counter:
+                    counter.add(change.patch)
+                else:
+                    counter = None
+            yield change
+        if counter is not None and counter is self._field_counter:
+            counter.flush()
+            self._field_counts_ready = True
 
     def schema_changes(
         self,
@@ -1814,20 +1851,18 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]):
         for duplicate in result.duplicates():
             yield _duplicate_dict(duplicate)
 
-        counter = result._field_counter() if result.config.field_diff else None
-        for change in result.changes():
-            if change.patch is not None:
-                counter.add(change.patch)
+        # Count fields during the change pass so the details report reads patches once.
+        for change in result._changes_with_field_counts():
             yield _change_dict(change)
 
-        if counter is not None:
-            for field_path, added, removed, replaced in counter.totals():
+        if result.config.field_diff:
+            for field in result.field_summary():
                 yield {
                     "type": "field_summary",
-                    "path": field_path,
-                    "added": added,
-                    "removed": removed,
-                    "replaced": replaced,
+                    "path": field.path,
+                    "added": field.added,
+                    "removed": field.removed,
+                    "replaced": field.replaced,
                 }
 
         summary = {
