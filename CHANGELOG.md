@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.2
+
 * **Added:** `DiffResult.field_summary()` yields per-path `FieldSummary(path, added, removed, replaced)` totals across modified records, ordered by path, matching the details `field_summary` records; requires `field_diff=True` (#29).
 * **Fixed:** Reject an empty or whitespace-only `--details` path with exit code `3` instead of completing the comparison without writing the details report.
 * **Fixed:** Prevent `--details` from overwriting OLD or NEW supplied as a `file://` URI, including hard-link aliases, by checking filesystem identity and rejecting the output with exit code `3`.
