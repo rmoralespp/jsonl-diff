@@ -7,6 +7,8 @@ import os
 import sqlite3
 import sys
 import tempfile
+import urllib.parse
+import urllib.request
 import warnings
 from dataclasses import dataclass
 from decimal import Decimal
@@ -1868,6 +1870,11 @@ def _write_details(result: DiffResult, path: Union[str, os.PathLike]):
 def _same_file(first: str, second: str) -> bool:
     # A missing path cannot alias an input: a missing input fails before any write.
     try:
+        if urllib.parse.urlsplit(second).scheme == "file":
+            first_stat = os.stat(first)
+            # Resolve file URIs with the same opener as the input reader.
+            with urllib.request.urlopen(second) as source:
+                return os.path.samestat(first_stat, os.fstat(source.fileno()))
         return os.path.samefile(first, second)
     except (OSError, ValueError):
         return False

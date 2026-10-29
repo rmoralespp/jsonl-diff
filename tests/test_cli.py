@@ -393,7 +393,29 @@ class TestTextOutput:
         assert "--details must not be the same file" in captured.err
         assert (old.read_bytes(), new.read_bytes()) == before
 
-    def test_details_rejects_hard_link_to_input(self, write_jsonl, tmp_path, capsys):
+    @pytest.mark.parametrize("target", ["old", "new"])
+    @pytest.mark.parametrize("authority", ["", "localhost", "127.0.0.1"])
+    def test_details_rejects_file_uri_input(self, write_jsonl, capsys, target, authority):
+        # Arrange
+        old = write_jsonl("old #%.jsonl", [{"id": 1, "value": "before"}])
+        new = write_jsonl("new #%.jsonl", [{"id": 1, "value": "after"}])
+        sources = [path.as_uri().replace("file://", "file://" + authority, 1) for path in (old, new)]
+        details = {"old": old, "new": new}[target]
+        before = (old.read_bytes(), new.read_bytes())
+
+        # Act
+        with pytest.raises(SystemExit) as exit_info:
+            main([*sources, "--key", "id", "--details", str(details)])
+        captured = capsys.readouterr()
+
+        # Assert
+        assert exit_info.value.code == 3
+        assert "--details must not be the same file as {}".format(target.upper()) in captured.err
+        assert not captured.out
+        assert (old.read_bytes(), new.read_bytes()) == before
+
+    @pytest.mark.parametrize("file_uri", [False, True])
+    def test_details_rejects_hard_link_to_input(self, write_jsonl, tmp_path, capsys, file_uri):
         # Arrange
         old, new = _different_sources(write_jsonl)
         link = tmp_path / "link.jsonl"
@@ -405,11 +427,30 @@ class TestTextOutput:
 
         # Act
         with pytest.raises(SystemExit) as exit_info:
-            main([str(old), str(new), "--key", "id", "--details", str(link)])
+            main([old.as_uri() if file_uri else str(old), str(new), "--key", "id", "--details", str(link)])
 
         # Assert
         assert exit_info.value.code == 3
         assert old.read_bytes() == before
+
+    def test_file_uri_inputs_allow_separate_details_output(self, write_jsonl, tmp_path, capsys):
+        # Arrange
+        old, new = _different_sources(write_jsonl)
+        details = tmp_path / "changes.jsonl"
+        details.write_text("previous report\n", encoding="utf-8")
+        before = (old.read_bytes(), new.read_bytes())
+
+        # Act
+        exit_code = main([old.as_uri(), new.as_uri(), "--key", "id", "--details", str(details), "--quiet"])
+        captured = capsys.readouterr()
+        events = [json.loads(line) for line in details.read_text(encoding="utf-8").splitlines()]
+
+        # Assert
+        assert exit_code == 1
+        assert captured == ("", "")
+        assert events[-1]["type"] == "summary"
+        assert events[-1]["modified"] == 1
+        assert (old.read_bytes(), new.read_bytes()) == before
 
     def test_details_do_not_change_stdout_summary(self, write_jsonl, tmp_path, capsys):
         # Arrange
