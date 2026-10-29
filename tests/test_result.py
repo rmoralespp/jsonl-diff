@@ -1,6 +1,7 @@
 import io
 import json
 import multiprocessing
+import os
 import sqlite3
 import tempfile
 import time
@@ -45,6 +46,44 @@ class _FailingWriteFile:
 
 def _raise_os_error(*args, **kwargs):
     raise OSError("unavailable")
+
+
+class _FailingRecordInsertCursor(sqlite3.Cursor):
+    _FAILING_STATEMENTS = ("INSERT INTO records VALUES", "INSERT OR IGNORE INTO records VALUES")
+
+    def _check(self, sql):
+        if sql.startswith(self._FAILING_STATEMENTS):
+            raise sqlite3.OperationalError("disk I/O error")
+
+    def execute(self, sql, *args):
+        self._check(sql)
+        return super().execute(sql, *args)
+
+    def executemany(self, sql, *args):
+        self._check(sql)
+        return super().executemany(sql, *args)
+
+
+class _FailingRecordInsertConnection(sqlite3.Connection):
+    def cursor(self, factory=_FailingRecordInsertCursor):
+        return super().cursor(factory)
+
+
+class _SpuriousConflictCursor(sqlite3.Cursor):
+    """Fail the first batch insert with a conflict that row-by-row replay does not reproduce."""
+
+    raised = False
+
+    def executemany(self, sql, *args):
+        if sql.startswith("INSERT INTO records VALUES") and not _SpuriousConflictCursor.raised:
+            _SpuriousConflictCursor.raised = True
+            raise sqlite3.IntegrityError("UNIQUE constraint failed")
+        return super().executemany(sql, *args)
+
+
+class _SpuriousConflictConnection(sqlite3.Connection):
+    def cursor(self, factory=_SpuriousConflictCursor):
+        return super().cursor(factory)
 
 
 class _ModuleProxy:
@@ -114,6 +153,14 @@ class TestClosedDiffResult:
 
         with pytest.raises(RuntimeError, match="closed"):
             list(result.schema_changes())
+
+    def test_changes_with_field_counts_after_close_ko(self, write_jsonl):
+        source = write_jsonl("data.jsonl", [{"id": 1}])
+        with diff(source, source, key="id", field_diff=True) as result:
+            pass
+
+        with pytest.raises(RuntimeError, match="closed"):
+            list(result._changes_with_field_counts())
 
 
 class TestDiffResultCleanup:
@@ -211,15 +258,17 @@ class TestDiffResultResourceErrors:
 class _FakeWorker:
     """Worker stand-in that ignores ``terminate()``; an unbounded ``join()`` simulates Ctrl+C."""
 
-    def __init__(self, start_error=None):
+    def __init__(self, start_error=None, exitcode=None):
         self.start_error = start_error
+        self.exitcode = exitcode
         self.alive = False
         self.calls = []
 
     def start(self):
         if self.start_error is not None:
             raise self.start_error
-        self.alive = True
+        # A worker with a preset exit code has already finished.
+        self.alive = self.exitcode is None
 
     def is_alive(self):
         return self.alive
@@ -291,6 +340,20 @@ class TestWorkerShutdown:
         assert workers[1].calls == ["terminate", "join", "kill", "join"]
         assert not any(worker.alive for worker in workers)
 
+    def test_interrupt_does_not_terminate_finished_worker(self, write_jsonl, monkeypatch):
+        # Arrange
+        source = write_jsonl("data.jsonl", [{"id": 1}])
+        workers = [_FakeWorker(exitcode=0), _FakeWorker()]
+        _use_workers(monkeypatch, list(workers))
+
+        # Act
+        with pytest.raises(KeyboardInterrupt):
+            with diff(source, source, key="id"):
+                pass
+
+        # Assert
+        assert workers[0].calls == ["join", "join"]
+
     def test_failed_start_stops_workers_and_reports_resource_error(self, write_jsonl, monkeypatch, capsys):
         # Arrange
         source = write_jsonl("data.jsonl", [{"id": 1}])
@@ -304,6 +367,64 @@ class TestWorkerShutdown:
         assert exit_code == 2
         assert capsys.readouterr().err == "ERROR: could not start indexing workers\n"
         assert not started.alive
+
+
+class TestIndexWorker:
+    @pytest.mark.parametrize("valid_config", [True, False], ids=["indexing_fails", "construction_fails"])
+    def test_failure_exits_non_zero(self, write_jsonl, tmp_path, monkeypatch, valid_config):
+        # Arrange: run in-process, since a real worker's `os._exit` skips coverage and cleanup hooks.
+        source = write_jsonl("data.jsonl", ["{not json"])
+        config = diff(source, source, key="id").config if valid_config else None
+
+        def fake_exit(code):
+            raise SystemExit(code)
+
+        monkeypatch.setattr(jsonl_diff, "os", _ModuleProxy(os, _exit=fake_exit))
+
+        # Act
+        with pytest.raises(SystemExit) as error:
+            jsonl_diff._index_worker(str(tmp_path / "side0.sqlite3"), str(source), 0, config)
+
+        # Assert
+        assert error.value.code == 1
+
+
+class TestSequentialIndexing:
+    """Failed workers make the parent re-index in-process, where storage failures surface."""
+
+    @pytest.mark.parametrize("duplicates", ["error", "first"])
+    def test_record_insert_failure_ko(self, write_jsonl, monkeypatch, duplicates):
+        # Arrange
+        source = write_jsonl("data.jsonl", [{"id": 1}])
+        _use_workers(monkeypatch, [_FakeWorker(exitcode=1), _FakeWorker(exitcode=1)])
+        monkeypatch.setattr(
+            jsonl_diff,
+            "sqlite3",
+            _ModuleProxy(sqlite3, connect=lambda path: sqlite3.connect(path, factory=_FailingRecordInsertConnection)),
+        )
+
+        # Act / Assert
+        with pytest.raises(ResourceError, match="could not write the temporary index"):
+            with diff(source, source, key="id", duplicates=duplicates):
+                pass
+
+    def test_batch_conflict_not_reproduced_on_replay_ok(self, write_jsonl, monkeypatch):
+        # Arrange
+        source = write_jsonl("data.jsonl", [{"id": 1}, {"id": 2}])
+        _use_workers(monkeypatch, [_FakeWorker(exitcode=1), _FakeWorker(exitcode=1)])
+        monkeypatch.setattr(_SpuriousConflictCursor, "raised", False)
+        monkeypatch.setattr(
+            jsonl_diff,
+            "sqlite3",
+            _ModuleProxy(sqlite3, connect=lambda path: sqlite3.connect(path, factory=_SpuriousConflictConnection)),
+        )
+
+        # Act
+        with diff(source, source, key="id") as result:
+            equal = result.equal
+
+        # Assert
+        assert (_SpuriousConflictCursor.raised, equal) == (True, 2)
 
 
 class TestStreamSources:
@@ -344,6 +465,13 @@ class TestIgnorePaths:
         with pytest.raises(InputError, match="schema ignore paths may not traverse arrays"):
             with diff(old, new, key="id", schema_diff=True, schema_ignore=["/items/x"]):
                 pass
+
+    def test_schema_ignore_nested_member_ok(self, write_jsonl):
+        old = write_jsonl("old.jsonl", [{"id": 1, "meta": {"skip": 1, "keep": 1}}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "meta": {"skip": "x", "keep": 1}}])
+
+        with diff(old, new, key="id", schema_diff=True, schema_ignore=["/meta/skip"]) as result:
+            assert result.has_schema_changes is False
 
 
 class TestWhereFilter:

@@ -4,6 +4,8 @@
 
 * **Added:** `DiffResult.field_summary()` yields per-path `FieldSummary(path, added, removed, replaced)` totals across modified records, ordered by path, matching the details `field_summary` records; requires `field_diff=True` (#29).
 * **Fixed:** Reject an empty or whitespace-only `--details` path with exit code `3` instead of completing the comparison without writing the details report.
+* **Changed:** Remove unreachable type checks in schema profiling and identity extraction; parsed input only yields JSON types, and numbers that are not integers are always `Decimal`. Behavior is unchanged.
+* **Tests:** Expand coverage from 97% to 100%.
 
 ## v0.3.1
 

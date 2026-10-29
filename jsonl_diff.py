@@ -38,8 +38,9 @@ _SCHEMA_TYPE_INDEXES = {
     "object": 7,
     "array": 8,
 }
-# Exact-class lookup for the common parsed types; Decimal, float and subclasses
-# fall back to `_schema_type`, which also decides integer versus number.
+# Exact-class lookup for the parsed types; the decoder parses every non-integer
+# number as Decimal, which falls back to `_decimal_schema_type` to decide
+# integer versus number.
 _SCHEMA_TYPE_INDEX_BY_CLASS = {
     bool: _SCHEMA_TYPE_INDEXES["boolean"],
     int: _SCHEMA_TYPE_INDEXES["integer"],
@@ -411,23 +412,8 @@ def _field_patch(
     return patch
 
 
-def _schema_type(value: Any) -> str:
-    if isinstance(value, bool):
-        return "boolean"
-    elif isinstance(value, str):
-        return "string"
-    elif isinstance(value, dict):
-        return "object"
-    elif isinstance(value, list):
-        return "array"
-    elif isinstance(value, Decimal):
-        return "integer" if value == value.to_integral_value() else "number"
-    elif isinstance(value, int):
-        return "integer"
-    elif isinstance(value, float):
-        return "integer" if value.is_integer() else "number"
-    else:
-        raise ValueError("unsupported JSON value type: {}".format(type(value).__name__))
+def _decimal_schema_type(value: Decimal) -> str:
+    return "integer" if value == value.to_integral_value() else "number"
 
 
 def _profile_schema(
@@ -464,7 +450,7 @@ def _profile_schema(
                 continue
             index = _SCHEMA_TYPE_INDEX_BY_CLASS.get(type(item))
             if index is None:
-                index = _SCHEMA_TYPE_INDEXES[_schema_type(item)]
+                index = _SCHEMA_TYPE_INDEXES[_decimal_schema_type(item)]
             counts[index] += 1
             if index == object_index:
                 stack.append((_pointer_child(path, name), item, child_tree or {}))
@@ -545,8 +531,6 @@ def _identity(
             # record into one indistinguishable identity.
             if not composite:
                 raise ValueError("identity field {!r} must be a non-null scalar".format(name))
-        elif not isinstance(value, (str, Decimal, bool, int, list, dict)):
-            raise ValueError("identity field {!r} must be a JSON value".format(name))
 
         values.append(value)
     return tuple(values)
