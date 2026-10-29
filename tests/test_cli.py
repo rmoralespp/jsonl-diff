@@ -168,6 +168,18 @@ class TestCliExitCodes:
         assert "modified:  1" in captured.out
         assert not captured.err
 
+    @pytest.mark.parametrize("expression", ["amount", "length(items)"])
+    def test_zero_where_result_does_not_hide_modified_records(self, write_jsonl, capsys, expression):
+        old = write_jsonl("old.jsonl", [{"id": 1, "amount": 0, "items": [], "value": "before"}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "amount": 0, "items": [], "value": "after"}])
+
+        exit_code = main([str(old), str(new), "--key", "id", "--where", expression])
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "modified:  1" in captured.out
+        assert not captured.err
+
     def test_cli_and_python_api_agree_on_where_filtering(self, write_jsonl, capsys):
         # Arrange
         old = write_jsonl(

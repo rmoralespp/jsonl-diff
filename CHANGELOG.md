@@ -6,6 +6,7 @@
 * **Fixed:** Reject an empty or whitespace-only `--details` path with exit code `3` instead of completing the comparison without writing the details report.
 * **Fixed:** Prevent `--details` from overwriting OLD or NEW supplied as a `file://` URI, including hard-link aliases, by checking filesystem identity and rejecting the output with exit code `3`.
 * **Fixed:** Preserve fractional and exponent literals in `--where` / `where=` as `Decimal` and support decimal values in JMESPath numeric functions; prevent `to_number()` truncation while retaining `to_string()` member order and ASCII escaping.
+* **Fixed:** Follow JMESPath truthiness in `--where` / `where=`, keeping numeric zero values instead of discarding records or misclassifying modifications as additions or deletions.
 * **Changed:** Remove unreachable type checks in schema profiling and identity extraction; parsed input only yields JSON types, and numbers that are not integers are always `Decimal`. Behavior is unchanged.
 * **Tests:** Expand coverage from 97% to 100%.
 

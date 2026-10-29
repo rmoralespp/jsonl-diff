@@ -465,6 +465,40 @@ class TestWhereFiltering:
         # Assert: id=2 (FR) never enters the comparison at all.
         assert summary == Summary(equal=0, added=0, deleted=0, modified=1)
 
+    @pytest.mark.parametrize(
+        "value,modified",
+        [
+            ("0", 1),
+            ("0.0", 1),
+            ("-0.00", 1),
+            ("1", 1),
+            ("true", 1),
+            ("false", 0),
+            ("null", 0),
+            ('""', 0),
+            ("[]", 0),
+            ("{}", 0),
+            ('"0"', 1),
+            ("[0]", 1),
+            ('{"n":0}', 1),
+        ],
+    )
+    def test_where_uses_jmespath_truthiness(self, write_jsonl, value, modified):
+        record = '{"id":1,"value":%s,"version":%%s}' % value
+        old = write_jsonl("old.jsonl", [record % 1])
+        new = write_jsonl("new.jsonl", [record % 2])
+
+        with diff(old, new, key="id", where="value") as result:
+            assert result.summary == Summary(equal=0, added=0, deleted=0, modified=modified)
+
+    @pytest.mark.parametrize("old_value,new_value", [(0, 1), (1, 0)])
+    def test_where_zero_transition_remains_a_modification(self, write_jsonl, old_value, new_value):
+        old = write_jsonl("old.jsonl", [{"id": 1, "amount": old_value}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "amount": new_value}])
+
+        with diff(old, new, key="id", where="amount") as result:
+            assert result.summary == Summary(equal=0, added=0, deleted=0, modified=1)
+
     def test_where_is_applied_independently_per_side(self, write_jsonl):
         # Arrange: id=2 only matches the filter in NEW, so it must appear as
         # an addition rather than modified/equal.

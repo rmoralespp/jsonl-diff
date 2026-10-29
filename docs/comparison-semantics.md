@@ -93,6 +93,9 @@ never indexed, so they cannot be reported as `added`, `deleted`, or
 `modified`, and they never trigger duplicate-key detection or contribute to
 duplicate counts.
 
+Truthiness follows JMESPath: only `false`, `null`, `""`, `[]`, and `{}` are
+false. Numbers, including `0` and `0.0`, are true.
+
 `--key`, `--where`, and `--ignore` have distinct, non-overlapping
 responsibilities: `--key` defines identity, `--where` defines which records
 participate at all, and `--ignore` defines which fields are excluded from

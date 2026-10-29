@@ -1300,7 +1300,10 @@ class DiffResult:
                 raise InputError("each record must be a JSON object", source, line)
             if self._where is not None:
                 try:
-                    matched = bool(self._where.search(record, options=_WHERE_OPTIONS))
+                    matched = self._where.search(record, options=_WHERE_OPTIONS)
+                    if not isinstance(matched, bool):
+                        # Unlike Python, JMESPath treats numeric zero as truthy.
+                        matched = matched is not None and matched not in ("", [], {})
                 except (TypeError, ValueError, DecimalException) as error:
                     raise InputError(str(error), source, line) from error
                 if not matched:
