@@ -4,6 +4,7 @@ import argparse
 import contextlib
 import hashlib
 import os
+import re
 import sqlite3
 import sys
 import tempfile
@@ -11,8 +12,9 @@ import urllib.parse
 import urllib.request
 import warnings
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, DecimalException, InvalidOperation
 from enum import Enum
+from json.encoder import encode_basestring_ascii
 from operator import itemgetter
 from typing import Any, Callable, Dict, Iterable, Iterator, Optional, Sequence, Tuple, Union
 
@@ -20,6 +22,7 @@ import ijson
 import jmespath
 import jsonl
 import msgspec
+from jmespath import functions
 
 utf8 = "utf-8"
 
@@ -52,6 +55,8 @@ _SCHEMA_TYPE_INDEX_BY_CLASS = {
 }
 
 _CANONICAL_ENCODER = msgspec.json.Encoder(decimal_format="number", order="sorted")
+_WHERE_ENCODER = msgspec.json.Encoder(decimal_format="number")
+_WHERE_ASCII_ESCAPES = re.compile(r"[^\x00-\x7e]+")
 _INPUT_DECODER = msgspec.json.Decoder(float_hook=Decimal)
 # Field patches split canonical objects into members kept as undecoded bytes.
 _RAW_MEMBERS_DECODER = msgspec.json.Decoder(Dict[str, msgspec.Raw])
@@ -538,10 +543,80 @@ def _identity(
     return tuple(values)
 
 
+class _WhereParser(jmespath.parser.Parser):
+    """Parse numeric literals exactly without changing JMESPath's shared cache."""
+
+    _CACHE = {}
+
+    def _parse(self, expression):
+        self._source = expression
+        return super()._parse(expression)
+
+    def _token_nud_literal(self, token):
+        if isinstance(token["value"], (float, list, dict)):
+            # `end` holds a length, which can exclude the closing backtick at EOF.
+            start = token["start"]
+            literal = self._source[start + 1 : start + token["end"]].removesuffix("`")
+            token = dict(token, value=_INPUT_DECODER.decode(literal.replace("\\`", "`")))
+        return super()._token_nud_literal(token)
+
+
+class _WhereFunctions(functions.Functions):
+    """Recognize Decimal values as JMESPath numbers without float conversion."""
+
+    def _get_allowed_pytypes(self, types):
+        allowed, subtypes = super()._get_allowed_pytypes(types)
+        if "float" in allowed:
+            allowed.append("Decimal")
+        return allowed, [subtype + ("Decimal",) if "float" in subtype else subtype for subtype in subtypes]
+
+    def _convert_to_jmespath_type(self, pyobject):
+        return "number" if pyobject == "Decimal" else super()._convert_to_jmespath_type(pyobject)
+
+    @functions.signature({"types": []})
+    def _func_type(self, arg):
+        return "number" if isinstance(arg, Decimal) else super()._func_type(arg)
+
+    @functions.signature({"types": []})
+    def _func_to_number(self, arg):
+        if isinstance(arg, Decimal):
+            return arg
+        if isinstance(arg, str):
+            try:
+                return int(arg)
+            except ValueError:
+                try:
+                    value = Decimal(arg)
+                except InvalidOperation:
+                    return None
+                return value if value.is_finite() else None
+        return super()._func_to_number(arg)
+
+    @functions.signature({"types": []})
+    def _func_to_string(self, arg):
+        if isinstance(arg, str):
+            return arg
+        text = _WHERE_ENCODER.encode(arg).decode(utf8)
+        if text.isascii() and "\x7f" not in text:
+            return text
+        return _WHERE_ASCII_ESCAPES.sub(lambda match: encode_basestring_ascii(match[0])[1:-1], text)
+
+    @functions.signature({"types": ["number"]})
+    def _func_abs(self, arg):
+        return arg.copy_abs() if isinstance(arg, Decimal) else super()._func_abs(arg)
+
+    @functions.signature({"types": ["array-number"]})
+    def _func_avg(self, arg):
+        return Decimal(sum(arg)) / len(arg) if arg else None
+
+
+_WHERE_OPTIONS = jmespath.Options(custom_functions=_WhereFunctions())
+
+
 def _compile_where(expression: str) -> Any:
     try:
-        return jmespath.compile(expression)
-    except jmespath.exceptions.JMESPathError as error:
+        return _WhereParser().parse(expression)
+    except (jmespath.exceptions.JMESPathError, msgspec.DecodeError, InvalidOperation) as error:
         raise ConfigurationError("invalid --where expression {!r}: {}".format(expression, error)) from error
 
 
@@ -1225,8 +1300,8 @@ class DiffResult:
                 raise InputError("each record must be a JSON object", source, line)
             if self._where is not None:
                 try:
-                    matched = bool(self._where.search(record))
-                except (TypeError, ValueError) as error:
+                    matched = bool(self._where.search(record, options=_WHERE_OPTIONS))
+                except (TypeError, ValueError, DecimalException) as error:
                     raise InputError(str(error), source, line) from error
                 if not matched:
                     if self.config.schema_diff and line % _SCHEMA_FLUSH_INTERVAL == 0:

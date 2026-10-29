@@ -501,6 +501,120 @@ class TestWhereFiltering:
         assert summary == Summary(equal=0, added=0, deleted=0, modified=0)
         assert changes == []
 
+    @pytest.mark.parametrize("input_format", ["jsonl", "json"])
+    @pytest.mark.parametrize(
+        "amount,literal,modified",
+        [
+            ("0.1", "0.1", 1),
+            ("0.1000000000000000000000000001", "0.1000000000000000000000000001", 1),
+            ("0.1000000000000000000000000001", "0.1", 0),
+            ("1e1000", "1e1000", 1),
+        ],
+    )
+    def test_where_preserves_decimal_literal_precision(self, tmp_path, input_format, amount, literal, modified):
+        old = tmp_path / ("old." + input_format)
+        new = tmp_path / ("new." + input_format)
+        for path, version in ((old, 1), (new, 2)):
+            record = '{"id":1,"amount":%s,"version":%s}' % (amount, version)
+            path.write_text("[" + record + "]" if input_format == "json" else record + "\n", encoding="utf-8")
+
+        with diff(old, new, key="id", format=input_format, where="amount == `%s`" % literal) as result:
+            assert result.summary == Summary(equal=0, added=0, deleted=0, modified=modified)
+
+    @pytest.mark.parametrize(
+        "expression,modified",
+        [
+            ("abs(amount) == `0.1` && type(amount) == 'number'", 1),
+            ("abs(`-0.12345678901234567890123456789`) == `0.12345678901234567890123456789`", 1),
+            ("to_number(amount) == `0.1` && to_number(text) == `0.1`", 1),
+            ("to_number(amount) == `0`", 0),
+            ("sum(values) == `1.3` && sort(values) == `[0.1,0.2,1]`", 1),
+            ("max(values) == `1` && min(values) == `0.1`", 1),
+            ("avg(`[0.1,0.2]`) == `0.15`", 1),
+            ("avg(int_values) == `0.1`", 1),
+            ("ceil(amount) == `1` && floor(amount) == `0`", 1),
+            (
+                "sort_by(items, &amount)[0].amount == `0.1`"
+                " && max_by(items, &amount).amount == `1` && min_by(items, &amount).amount == `0.1`",
+                1,
+            ),
+            ("to_string(amount) == '0.1' && to_string(values) == '[0.1,0.2,1]'", 1),
+            ('payload == `{"numbers":[0.1,0.2],"text":"a\\`b"}`', 1),
+            ("amount > `0.1`", 0),
+            (
+                "to_number('invalid') == `null` && to_number('12') == `12`"
+                " && to_number(`true`) == `null` && to_number('NaN') == `null` && type('x') == 'string'",
+                1,
+            ),
+            ("avg(`[]`) == `null` && abs(`-2`) == `2` && to_string('x') == 'x'", 1),
+        ],
+    )
+    def test_where_numeric_functions_support_decimals(self, write_jsonl, expression, modified):
+        record = (
+            '{"id":1,"amount":0.1,"text":"0.1","values":[0.1,0.2,1],'
+            '"int_values":[0,0,1,0,0,0,0,0,0,0],"items":[{"amount":1},{"amount":0.1}],'
+            '"payload":{"numbers":[0.1,0.2],"text":"a`b"},"version":%s}'
+        )
+        old = write_jsonl("old.jsonl", [record % 1])
+        new = write_jsonl("new.jsonl", [record % 2])
+
+        with diff(old, new, key="id", where=expression) as result:
+            assert result.summary == Summary(equal=0, added=0, deleted=0, modified=modified)
+
+    @pytest.mark.parametrize(
+        "payload",
+        [
+            {"b": "\u00f1", "a": 1},
+            {"\u4e2d": "\U0001f600"},
+            ["\x7f", "\"\\/\b\f\n\r\t"],
+            {"literal": r"\u00f1", "text": "\u00f1"},
+            "\u00f1\U0001f600",
+        ],
+    )
+    def test_where_to_string_preserves_standard_json_escaping(self, write_jsonl, payload):
+        old = write_jsonl("old.jsonl", [{"id": 1, "payload": payload, "version": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "payload": payload, "version": 2}])
+        expected = payload if isinstance(payload, str) else json.dumps(payload, separators=(",", ":"))
+        expression = "to_string(payload) == `%s`" % json.dumps(expected)
+
+        with diff(old, new, key="id", where=expression) as result:
+            assert result.summary == Summary(equal=0, added=0, deleted=0, modified=1)
+
+    def test_where_to_string_preserves_escaping_with_decimal_numbers(self, write_jsonl):
+        record = (
+            r'{"id":1,"payload":{"b":"\u00f1","a":[0.10000000000000000001,"\ud83d\ude00"]},'
+            r'"version":%s}'
+        )
+        old = write_jsonl("old.jsonl", [record % 1])
+        new = write_jsonl("new.jsonl", [record % 2])
+        expected = r'{"b":"\u00f1","a":[0.10000000000000000001,"\ud83d\ude00"]}'
+        expression = "to_string(payload) == `%s`" % json.dumps(expected)
+
+        with diff(old, new, key="id", where=expression) as result:
+            assert result.summary == Summary(equal=0, added=0, deleted=0, modified=1)
+
+    @pytest.mark.parametrize("literal", ["NaN", "1e9999999999999999999"])
+    def test_where_rejects_unrepresentable_numeric_literals_before_reading_inputs(self, literal):
+        with pytest.raises(ConfigurationError, match="invalid --where expression"):
+            diff("missing-old.jsonl", "missing-new.jsonl", key="id", where="amount == `%s`" % literal)
+
+    def test_where_decimal_arithmetic_failure_reports_source_and_line(self, write_jsonl):
+        source = write_jsonl("data.jsonl", ['{"id":1,"values":[1e1000000]}'])
+
+        with pytest.raises(InputError, match="OLD at line 1"):
+            with diff(source, source, key="id", where="sum(values) > `0`"):
+                pass
+
+    def test_where_decimal_support_does_not_change_default_jmespath(self, write_jsonl):
+        import jmespath
+
+        source = write_jsonl("data.jsonl", ['{"id":1,"amount":0.1}'])
+        expression = "amount == `0.1`"
+        with diff(source, source, key="id", where=expression) as result:
+            assert result.equal == 1
+
+        assert jmespath.search(expression, {"amount": 0.1}) is True
+
     def test_filtered_records_do_not_trigger_duplicate_detection(self, write_jsonl):
         # Arrange: two records share id=1 but only one passes the filter.
         old = write_jsonl(
@@ -620,20 +734,16 @@ class TestWhereFiltering:
 
     def test_where_expression_is_compiled_once_and_reused(self, write_jsonl, monkeypatch):
         # Arrange
-        import jmespath
-
-        import jsonl_diff
-
         old = write_jsonl("old.jsonl", [{"id": 1, "active": True}, {"id": 2, "active": True}])
         new = write_jsonl("new.jsonl", [{"id": 1, "active": True}, {"id": 2, "active": True}])
         calls = []
-        original_compile = jmespath.compile
+        original_compile = jsonl_diff._compile_where
 
         def counting_compile(expression):
             calls.append(expression)
             return original_compile(expression)
 
-        monkeypatch.setattr(jsonl_diff.jmespath, "compile", counting_compile)
+        monkeypatch.setattr(jsonl_diff, "_compile_where", counting_compile)
 
         # Act
         with diff(old, new, key="id", where="active == `true`") as result:

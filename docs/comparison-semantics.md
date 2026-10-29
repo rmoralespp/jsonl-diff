@@ -110,6 +110,17 @@ string value must be quoted twice: `` `"ES"` ``. The bare form `` `ES` `` also
 works but is a deprecated JMESPath syntax that raises a
 `PendingDeprecationWarning`.
 
+Fractional and exponent literals, including numbers inside array and object
+literals, are parsed as `Decimal`, like input values. Numeric functions accept
+these values as numbers: `` amount == `0.1` `` matches an input value of `0.1`,
+and `to_number()` does not truncate decimal values. Numeric comparisons use
+numeric value, not the representation-sensitive rules used for record identity
+and content. Arithmetic on decimals follows Python's `decimal` context.
+`to_string()` serializes decimals as JSON numbers, including inside arrays and
+objects, rather than turning them into quoted strings. Object member order and
+standard ASCII escaping are preserved; an argument that is already a string is
+returned unchanged.
+
 ## Observed schema diff
 
 `schema_diff=True` / `--schema-diff` profiles the structure observed in each

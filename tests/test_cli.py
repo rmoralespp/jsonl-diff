@@ -157,6 +157,17 @@ class TestCliExitCodes:
         assert captured_exit.value.code == 3
         assert not captured.out
 
+    def test_decimal_where_does_not_hide_modified_records(self, write_jsonl, capsys):
+        old = write_jsonl("old.jsonl", ['{"id":1,"amount":0.1,"value":"before"}'])
+        new = write_jsonl("new.jsonl", ['{"id":1,"amount":0.1,"value":"after"}'])
+
+        exit_code = main([str(old), str(new), "--key", "id", "--where", "amount == `0.1`"])
+        captured = capsys.readouterr()
+
+        assert exit_code == 1
+        assert "modified:  1" in captured.out
+        assert not captured.err
+
     def test_cli_and_python_api_agree_on_where_filtering(self, write_jsonl, capsys):
         # Arrange
         old = write_jsonl(
