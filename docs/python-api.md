@@ -79,9 +79,10 @@ resources and removes its private workspace on exit. A result cannot be entered
 more than once. Its summary becomes available after entering and remains
 available after closing; iterating changes requires the context to remain open.
 
-All queries inside one context reuse the same index: `summary`,
-`changes()`, `schema_changes()`, and `duplicates()` can be called any number of
-times, with or without operation filters, without reading the sources again.
+All queries inside one context reuse the same index: `summary`, `changes()`,
+`schema_changes()`, `field_summary()`, and `duplicates()` can be called any
+number of times, with or without operation filters, without reading the
+sources again.
 Prefer one context over several `diff()` calls on the same inputs, since each
 new context indexes both sources from scratch.
 
@@ -139,6 +140,23 @@ with diff("old.jsonl", "new.jsonl", key="id", field_diff=True) as result:
         for field in change.patch:
             print(change.key, field.op, field.path, field.old, field.value)
 ```
+
+`result.field_summary()` lazily yields immutable `FieldSummary` values that
+aggregate those operations across all modified records, one per RFC 6901
+`path`, with integer `added`, `removed`, and `replaced` counts. Items are
+ordered by path, matching the `field_summary` records of the details report.
+Totals are computed on first use and stored in the temporary index, so repeated
+calls do not recompute patches and memory stays bounded for any number of
+distinct paths:
+
+```python
+with diff("old.jsonl", "new.jsonl", key="id", field_diff=True) as result:
+    for item in result.field_summary():
+        print(item.path, item.added, item.removed, item.replaced)
+```
+
+Field-summary iteration requires an open result and raises `RuntimeError` when
+field diff was not enabled. It is empty when no records were modified.
 
 Pass a `ChangeOperation` to filter without materializing all changes:
 

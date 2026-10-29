@@ -1,3 +1,4 @@
+import json
 import sqlite3
 import sys
 from collections.abc import Iterator
@@ -6,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import jsonl_diff
 from jsonl_diff import (
     ChangeOperation,
     ConfigurationError,
@@ -13,6 +15,7 @@ from jsonl_diff import (
     DiffResult,
     DuplicateKeyError,
     DuplicatePolicy,
+    FieldSummary,
     InputError,
     MissingKeyPolicy,
     ResourceError,
@@ -1696,3 +1699,120 @@ class TestFieldDiff:
         with pytest.raises(ResourceError, match="could not write the temporary index"):
             with diff(old, new, key="id", field_diff=True):
                 pass
+
+    def test_field_summary_aggregates_operations_by_path(self, write_jsonl):
+        # Arrange
+        old = write_jsonl(
+            "old.jsonl",
+            [{"id": 1, "a": 1, "b": 1}, {"id": 2, "a": 1, "c": 1}, {"id": 3, "a": 1}, {"id": 4}],
+        )
+        new = write_jsonl(
+            "new.jsonl",
+            [{"id": 1, "a": 2, "z": 1}, {"id": 2, "a": 2, "b": 1}, {"id": 3, "a": 1}, {"id": 5}],
+        )
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            summary = list(result.field_summary())
+
+        # Assert
+        assert summary == [
+            FieldSummary("/a", added=0, removed=0, replaced=2),
+            FieldSummary("/b", added=1, removed=1, replaced=0),
+            FieldSummary("/c", added=0, removed=1, replaced=0),
+            FieldSummary("/z", added=1, removed=0, replaced=0),
+        ]
+
+    def test_field_summary_is_repeatable(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": 2}])
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            first = list(result.field_summary())
+            second = list(result.field_summary())
+
+        # Assert
+        assert first == second == [FieldSummary("/v", added=0, removed=0, replaced=1)]
+
+    def test_details_report_reuses_field_summary_totals(self, write_jsonl, tmp_path):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": 1}, {"id": 2, "v": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": 2}, {"id": 2, "w": 1}])
+        details = tmp_path / "details.jsonl"
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            api = list(result.field_summary())
+            jsonl_diff._write_details(result, details)
+
+        # Assert
+        reported = [
+            FieldSummary(item["path"], item["added"], item["removed"], item["replaced"])
+            for item in map(json.loads, details.read_text(encoding="utf-8").splitlines())
+            if item["type"] == "field_summary"
+        ]
+        assert reported == api == [
+            FieldSummary("/v", added=0, removed=1, replaced=1),
+            FieldSummary("/w", added=1, removed=0, replaced=0),
+        ]
+
+    @pytest.mark.parametrize("consumed", [1, 2])
+    def test_field_summary_during_a_suspended_count_pass_is_not_double_counted(
+        self, write_jsonl, monkeypatch, consumed,
+    ):
+        # Arrange
+        monkeypatch.setattr(jsonl_diff, "_INSERT_BATCH", 1)
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": 1}, {"id": 2, "a": 1, "b": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": 2}, {"id": 2, "a": 2, "b": 2}])
+        expected = [
+            FieldSummary("/a", added=0, removed=0, replaced=1),
+            FieldSummary("/b", added=0, removed=0, replaced=1),
+            FieldSummary("/v", added=0, removed=0, replaced=1),
+        ]
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            suspended = result._changes_with_field_counts()
+            for _ in range(consumed):
+                next(suspended)
+            during = list(result.field_summary())
+            list(suspended)
+            after = list(result.field_summary())
+
+        # Assert
+        assert during == after == expected
+
+    def test_field_summary_is_empty_without_modified_records(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 2}])
+
+        # Act
+        with diff(old, new, key="id", field_diff=True) as result:
+            summary = list(result.field_summary())
+
+        # Assert
+        assert summary == []
+
+    def test_field_summary_requires_field_diff(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": 2}])
+
+        # Act / Assert
+        with diff(old, new, key="id") as result:
+            with pytest.raises(RuntimeError, match="field diff was not enabled"):
+                list(result.field_summary())
+
+    def test_field_summary_requires_an_open_result(self, write_jsonl):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1, "v": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1, "v": 2}])
+        with diff(old, new, key="id", field_diff=True) as result:
+            pass
+
+        # Act / Assert
+        with pytest.raises(RuntimeError, match="the diff result is closed"):
+            list(result.field_summary())

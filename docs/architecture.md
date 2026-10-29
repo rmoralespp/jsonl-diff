@@ -74,7 +74,9 @@ Verified bodies go to a `field_bodies` table indexed by side and identity
 each patch lazily, comparing undecoded members as bytes and decoding only
 changed values. `field_summary` totals are buffered per batch and merged into a
 `field_counts` table keyed by path, so dynamic property names spill to disk
-instead of growing memory. Without field diff nothing is reread.
+instead of growing memory. The table is built once per result, during the
+details pass or the first `DiffResult.field_summary()` call, and reused by
+later reads. Without field diff nothing is reread.
 
 ## Cleanup
 
@@ -93,7 +95,7 @@ decompressed byte stream with `py-jsonl.open_stream()` and parses top-level
 array elements incrementally with `ijson`.
 
 | Source             |       CLI        |           Python API            |
-|---------------------|:----------------:|:--------------------------------:|
+|--------------------|:----------------:|:-------------------------------:|
 | Local path         |       Yes        | Yes, including path-like values |
 | HTTP/HTTPS URL     |       Yes        |               Yes               |
 | File-like object   |        No        |               Yes               |

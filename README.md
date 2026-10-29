@@ -254,6 +254,9 @@ def main():
             for field in change.patch:
                 print(" ", field.op, field.path, field.old, field.value)
 
+        for item in result.field_summary():
+            print(item.path, item.added, item.removed, item.replaced)
+
         for change in result.schema_changes():
             print(change.operation, change.path)
 
@@ -264,8 +267,8 @@ if __name__ == "__main__":
 
 `diff()` returns a context-managed, disk-backed `DiffResult`. Entering the
 context completely validates and indexes both sources. Changes, duplicates,
-and schema changes are then iterated lazily instead of being materialized in
-memory.
+schema changes, and field summaries are then iterated lazily instead of being
+materialized in memory.
 
 Applications must protect the entry point because indexing uses worker
 processes. See [Parallel indexing](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/parallel-indexing.md#application-entry-points)
@@ -275,7 +278,7 @@ The immutable result models include:
 
 - `Summary` and `SchemaSummary`
 - `Change` and `SourceLocation`
-- `FieldChange` and `FieldOperation` (with `field_diff=True`)
+- `FieldChange`, `FieldOperation`, and `FieldSummary` (with `field_diff=True`)
 - `Duplicate`
 - `SchemaChange` and `SchemaFieldProfile`
 
