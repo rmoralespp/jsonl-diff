@@ -1775,6 +1775,51 @@ class TestFieldDiff:
         # Assert
         assert values == {number: -number - 1 for number in range(count)}
 
+    @pytest.mark.parametrize("input_format", ["jsonl", "json"])
+    @pytest.mark.parametrize(
+        "byte_limit,record_limit,expected_inserted",
+        [
+            (28, 2048, [0, 0, 2, 2, 4]),
+            (13, 2048, [0, 1, 2, 3, 4]),
+            (42, 2, [0, 0, 2, 2, 4]),
+        ],
+        ids=["byte-limit", "oversized-body", "record-limit"],
+    )
+    def test_field_body_batches_flush_before_reading_more_records(
+        self, write_jsonl, monkeypatch, input_format, byte_limit, record_limit, expected_inserted,
+    ):
+        # Each canonical body is 14 bytes, so two bodies exactly fill the 28-byte limit.
+        old_records = [{"id": number, "v": 0} for number in range(1, 6)]
+        new_records = [{"id": number, "v": 1} for number in range(1, 6)]
+        old = write_jsonl("old." + input_format, old_records if input_format == "jsonl" else [old_records])
+        new = write_jsonl("new." + input_format, new_records if input_format == "jsonl" else [new_records])
+        monkeypatch.setattr(jsonl_diff, "_FIELD_BODY_BATCH_BYTES", byte_limit)
+        monkeypatch.setattr(jsonl_diff, "_INSERT_BATCH", record_limit)
+        inserted = {0: [], 1: []}
+        original_insert = DiffResult._insert_field_bodies
+
+        def observe_insert(result, items, side, name, parse):
+            def observe_items():
+                for item in items:
+                    count = result._connection.execute(
+                        "SELECT COUNT(*) FROM field_bodies WHERE side = ?", (side,),
+                    ).fetchone()[0]
+                    inserted[side].append(count)
+                    yield item
+
+            original_insert(result, observe_items(), side, name, parse)
+
+        monkeypatch.setattr(DiffResult, "_insert_field_bodies", observe_insert)
+
+        with diff(old, new, key="id", format=input_format, field_diff=True) as result:
+            patches = [
+                (change.key[0], [(item.op, item.path, item.old, item.value) for item in change.patch])
+                for change in result.changes()
+            ]
+
+        assert inserted == {0: expected_inserted, 1: expected_inserted}
+        assert patches == [(number, [("replace", "/v", 0, 1)]) for number in range(1, 6)]
+
     def test_comparison_without_modified_records_skips_the_reread(self, write_jsonl, tmp_path):
         # Arrange
         old = write_jsonl("old.jsonl", [{"id": 1}, {"id": 2}])

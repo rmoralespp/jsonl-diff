@@ -35,6 +35,7 @@ _MISSING = object()
 _SCHEMA_FLUSH_INTERVAL = 1024
 # Records are inserted in batches to amortize per-statement overhead.
 _INSERT_BATCH = 2048
+_FIELD_BODY_BATCH_BYTES = 8 * 1024 * 1024
 _SCHEMA_TYPE_INDEXES = {
     "boolean": 3,
     "integer": 4,
@@ -1698,6 +1699,7 @@ class DiffResult:
         wanted = self._connection.execute(_SIDE_LINES_QUERIES[side])
         cursor = self._connection.cursor()
         pending = []
+        pending_bytes = 0
         target = next(wanted)
         for line, item in enumerate(items, start=1):
             if line != target[0]:
@@ -1710,9 +1712,11 @@ class DiffResult:
             if canonical is None or _fingerprint(canonical) != (target[2], target[3]):
                 raise InputError("source changed during comparison", name, line)
             pending.append((side, target[1], canonical))
-            if len(pending) >= _INSERT_BATCH:
+            pending_bytes += len(canonical)
+            if len(pending) >= _INSERT_BATCH or pending_bytes >= _FIELD_BODY_BATCH_BYTES:
                 cursor.executemany(_FIELD_BODIES_INSERT, pending)
                 pending.clear()
+                pending_bytes = 0
             target = next(wanted, None)
             if target is None:
                 break

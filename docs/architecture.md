@@ -70,7 +70,12 @@ sources are decompressed again, `--format json` is fully reparsed, and URLs are
 downloaded again; staged stdin and file-like inputs use the workspace copy.
 
 Verified bodies go to a `field_bodies` table indexed by side and identity
-(about twice the canonical size of the modified records). `changes()` computes
+(about twice the canonical size of the modified records). Insertion batches
+are flushed at 2048 bodies or 8 MiB of canonical body bytes, whichever comes
+first. The byte threshold is checked after adding each body, so one large
+record can exceed it and is flushed immediately. This is not a total RAM
+limit: decoded records, identities, Python objects, and database buffers also
+consume memory. `changes()` computes
 each patch lazily, comparing undecoded members as bytes and decoding only
 changed values. `field_summary` totals are buffered per batch and merged into a
 `field_counts` table keyed by path, so dynamic property names spill to disk
