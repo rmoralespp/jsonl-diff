@@ -6,6 +6,7 @@ import sqlite3
 import tempfile
 import time
 import types
+from decimal import InvalidOperation, Overflow
 
 import pytest
 
@@ -391,6 +392,30 @@ class TestIndexWorker:
 
 class TestSequentialIndexing:
     """Failed workers make the parent re-index in-process, where storage failures surface."""
+
+    @pytest.mark.parametrize("error_type", [InvalidOperation, Overflow])
+    @pytest.mark.parametrize("input_format", ["jsonl", "json"])
+    def test_decimal_reader_failure_is_an_input_error(self, write_jsonl, monkeypatch, error_type, input_format, capsys):
+        source = write_jsonl("data." + input_format, [])
+        _use_workers(monkeypatch, [_FakeWorker(exitcode=1), _FakeWorker(exitcode=1)])
+
+        def failing_records(source, on_error, input_format):
+            yield {"id": 1}
+            error = error_type("decimal conversion failed")
+            if input_format == "jsonl":
+                on_error(2, error)
+            raise error
+
+        monkeypatch.setattr(jsonl_diff, "_records", failing_records)
+
+        with pytest.raises(InputError, match=r"invalid input \(%s\)" % error_type.__name__) as captured:
+            with diff(source, source, key="id", format=input_format):
+                pass
+
+        assert captured.value.source == "OLD"
+        assert captured.value.line == (2 if input_format == "jsonl" else None)
+        assert isinstance(captured.value.__cause__, error_type)
+        assert capsys.readouterr() == ("", "")
 
     @pytest.mark.parametrize("duplicates", ["error", "first"])
     def test_record_insert_failure_ko(self, write_jsonl, monkeypatch, duplicates):

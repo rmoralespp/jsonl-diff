@@ -1,6 +1,16 @@
 import json
+from decimal import Decimal, InvalidOperation
 
 import pytest
+
+
+@pytest.fixture
+def decimal_supports_extreme_exponents():
+    """Detect exponent support without assuming a particular Decimal backend."""
+    try:
+        return Decimal("1e9999999999999999999").is_finite()
+    except InvalidOperation:
+        return False
 
 
 @pytest.fixture

@@ -96,17 +96,24 @@ class TestCliExitCodes:
         assert not captured.out
 
     @pytest.mark.parametrize("bad_side", ["OLD", "NEW"])
-    def test_unrepresentable_exponent_returns_two_without_traceback(self, write_jsonl, capsys, bad_side):
+    def test_extreme_exponent_follows_decimal_support(
+        self, write_jsonl, capsys, bad_side, decimal_supports_extreme_exponents,
+    ):
         valid = write_jsonl("valid.jsonl", [{"id": 1}])
-        invalid = write_jsonl("invalid.jsonl", ['{"id":1}', '{"id":2,"value":1e9999999999999999999}'])
-        old, new = (invalid, valid) if bad_side == "OLD" else (valid, invalid)
+        extreme = write_jsonl("extreme.jsonl", ['{"id":1}', '{"id":2,"value":1e9999999999999999999}'])
+        old, new = (extreme, valid) if bad_side == "OLD" else (valid, extreme)
 
         exit_code = main([str(old), str(new), "--key", "id"])
         captured = capsys.readouterr()
 
-        assert exit_code == 2
-        assert not captured.out
-        assert captured.err == "ERROR: invalid input (InvalidOperation) in {} at line 2\n".format(bad_side)
+        if decimal_supports_extreme_exponents:
+            assert exit_code == 1
+            assert "{}:".format("deleted" if bad_side == "OLD" else "added") in captured.out
+            assert not captured.err
+        else:
+            assert exit_code == 2
+            assert not captured.out
+            assert captured.err == "ERROR: invalid input (InvalidOperation) in {} at line 2\n".format(bad_side)
 
     def test_output_error_returns_two(self, write_jsonl, capsys, monkeypatch):
         # Arrange

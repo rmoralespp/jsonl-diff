@@ -631,10 +631,24 @@ class TestWhereFiltering:
         with diff(old, new, key="id", where=expression) as result:
             assert result.summary == Summary(equal=0, added=0, deleted=0, modified=1)
 
-    @pytest.mark.parametrize("literal", ["NaN", "1e9999999999999999999"])
-    def test_where_rejects_unrepresentable_numeric_literals_before_reading_inputs(self, literal):
+    def test_where_rejects_nonfinite_numeric_literals_before_reading_inputs(self):
         with pytest.raises(ConfigurationError, match="invalid --where expression"):
-            diff("missing-old.jsonl", "missing-new.jsonl", key="id", where="amount == `%s`" % literal)
+            diff("missing-old.jsonl", "missing-new.jsonl", key="id", where="amount == `NaN`")
+
+    def test_where_extreme_numeric_literal_follows_decimal_support(
+        self, write_jsonl, decimal_supports_extreme_exponents,
+    ):
+        expression = "amount == `1e9999999999999999999`"
+        if not decimal_supports_extreme_exponents:
+            with pytest.raises(ConfigurationError, match="invalid --where expression"):
+                diff("missing-old.jsonl", "missing-new.jsonl", key="id", where=expression)
+            return
+
+        old = write_jsonl("old.jsonl", ['{"id":1,"amount":1e9999999999999999999,"version":1}'])
+        new = write_jsonl("new.jsonl", ['{"id":1,"amount":1e9999999999999999999,"version":2}'])
+
+        with diff(old, new, key="id", where=expression) as result:
+            assert result.summary == Summary(equal=0, added=0, deleted=0, modified=1)
 
     def test_where_decimal_arithmetic_failure_reports_source_and_line(self, write_jsonl):
         source = write_jsonl("data.jsonl", ['{"id":1,"values":[1e1000000]}'])
@@ -1138,7 +1152,9 @@ class TestInputValidation:
 
     @pytest.mark.parametrize("input_format", ["jsonl", "json"])
     @pytest.mark.parametrize("number", ["1e9999999999999999999", "1e-9999999999999999999"])
-    def test_unrepresentable_exponents_are_input_errors(self, write_jsonl, input_format, number):
+    def test_extreme_exponents_follow_decimal_support(
+        self, write_jsonl, input_format, number, decimal_supports_extreme_exponents,
+    ):
         old_records = ['{"id":1}']
         new_records = ['{"id":1}', '{"id":2,"value":%s}' % number]
         if input_format == "json":
@@ -1146,6 +1162,11 @@ class TestInputValidation:
             new_records = ["[" + ",".join(new_records) + "]"]
         old = write_jsonl("old." + input_format, old_records)
         new = write_jsonl("new." + input_format, new_records)
+
+        if decimal_supports_extreme_exponents:
+            with diff(old, new, key="id", format=input_format) as result:
+                assert result.summary == Summary(equal=1, added=1, deleted=0, modified=0)
+            return
 
         with pytest.raises(InputError, match=r"invalid input \(InvalidOperation\)") as captured:
             with diff(old, new, key="id", format=input_format):

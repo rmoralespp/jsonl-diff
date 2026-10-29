@@ -11,6 +11,7 @@
 * **Fixed:** Report decimal conversion failures while reading JSONL or JSON arrays as `InputError` with CLI exit code `2`, instead of an uncaught traceback; large representable exponents remain supported.
 * **Changed:** Remove unreachable type checks in schema profiling and identity extraction; parsed input only yields JSON types, and numbers that are not integers are always `Decimal`. Behavior is unchanged.
 * **Tests:** Expand coverage from 97% to 100%.
+* **Tests:** Make extreme-exponent regressions independent of the Decimal backend's supported range, preserving valid inputs and checking decimal reader error handling explicitly.
 
 ## v0.3.1
 
