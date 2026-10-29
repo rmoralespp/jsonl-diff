@@ -295,6 +295,20 @@ class TestCliExitCodes:
         assert captured_exit.value.code == 3
         assert "--field-diff requires --details" in capsys.readouterr().err
 
+    @pytest.mark.parametrize("details", ["", "   ", "\t"])
+    def test_blank_details_path_is_rejected(self, write_jsonl, capsys, details):
+        # Arrange
+        old = write_jsonl("old.jsonl", [{"id": 1}])
+        new = write_jsonl("new.jsonl", [{"id": 1}])
+
+        # Act
+        with pytest.raises(SystemExit) as captured_exit:
+            main([str(old), str(new), "--key", "id", "--details", details])
+
+        # Assert
+        assert captured_exit.value.code == 3
+        assert "--details requires a non-empty file path" in capsys.readouterr().err
+
 
 class TestKeyOptionParsing:
     def test_comma_separated_keys_with_surrounding_whitespace_are_trimmed(

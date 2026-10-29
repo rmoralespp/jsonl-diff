@@ -1952,6 +1952,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         parser.error("OLD and NEW cannot both read from stdin")
     if arguments.schema_ignore and not arguments.schema_diff:
         parser.error("--schema-ignore requires --schema-diff")
+    if arguments.details is not None and not arguments.details.strip():
+        parser.error("--details requires a non-empty file path")
     if arguments.field_diff and arguments.details is None:
         parser.error("--field-diff requires --details")
     if arguments.details is not None:
