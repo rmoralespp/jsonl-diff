@@ -95,6 +95,19 @@ class TestCliExitCodes:
         assert exit_code == 2
         assert not captured.out
 
+    @pytest.mark.parametrize("bad_side", ["OLD", "NEW"])
+    def test_unrepresentable_exponent_returns_two_without_traceback(self, write_jsonl, capsys, bad_side):
+        valid = write_jsonl("valid.jsonl", [{"id": 1}])
+        invalid = write_jsonl("invalid.jsonl", ['{"id":1}', '{"id":2,"value":1e9999999999999999999}'])
+        old, new = (invalid, valid) if bad_side == "OLD" else (valid, invalid)
+
+        exit_code = main([str(old), str(new), "--key", "id"])
+        captured = capsys.readouterr()
+
+        assert exit_code == 2
+        assert not captured.out
+        assert captured.err == "ERROR: invalid input (InvalidOperation) in {} at line 2\n".format(bad_side)
+
     def test_output_error_returns_two(self, write_jsonl, capsys, monkeypatch):
         # Arrange
         old = write_jsonl("old.jsonl", [{"id": 1}])

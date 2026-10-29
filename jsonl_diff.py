@@ -695,7 +695,7 @@ _FIELD_COUNTS_UPSERT = """
 _FIELD_COUNTS_QUERY = "SELECT path, added, removed, replaced FROM field_counts ORDER BY path"
 _SIDE_NAMES = ("OLD", "NEW")
 # Exceptions a reader raises for malformed or unreadable input.
-_READ_ERRORS = (OSError, EOFError, ValueError, RuntimeError, ijson.JSONError)
+_READ_ERRORS = (OSError, EOFError, ValueError, RuntimeError, DecimalException, ijson.JSONError)
 
 
 @contextlib.contextmanager

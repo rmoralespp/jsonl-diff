@@ -8,6 +8,7 @@
 * **Fixed:** Preserve fractional and exponent literals in `--where` / `where=` as `Decimal` and support decimal values in JMESPath numeric functions; prevent `to_number()` truncation while retaining `to_string()` member order and ASCII escaping.
 * **Fixed:** Follow JMESPath truthiness in `--where` / `where=`, keeping numeric zero values instead of discarding records or misclassifying modifications as additions or deletions.
 * **Fixed:** Flush field-diff body batches when they reach 8 MiB of canonical content or 2048 records, avoiding excessive buffering of large modified records; oversized bodies are flushed immediately.
+* **Fixed:** Report decimal conversion failures while reading JSONL or JSON arrays as `InputError` with CLI exit code `2`, instead of an uncaught traceback; large representable exponents remain supported.
 * **Changed:** Remove unreachable type checks in schema profiling and identity extraction; parsed input only yields JSON types, and numbers that are not integers are always `Decimal`. Behavior is unchanged.
 * **Tests:** Expand coverage from 97% to 100%.
 

@@ -19,6 +19,8 @@ filters records, compares content, and orders output. See the main
 - Input errors identify `OLD` or `NEW` and include the physical line when available.
 - Integer literals longer than CPython's `int_max_str_digits` limit (4300
   digits by default) are rejected by the `msgspec` decoder.
+- Decimal conversion failures, including exponents outside the representable
+  range, are input errors. Large representable exponents remain supported.
 
 No normal summary or details output begins until both inputs pass complete
 input and duplicate validation.

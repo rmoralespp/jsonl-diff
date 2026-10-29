@@ -314,13 +314,17 @@ class TestIdentityKeys:
 
         assert summary == Summary(equal=1, added=0, deleted=0, modified=0)
 
-    def test_extreme_exponents_remain_compact(self, write_jsonl):
+    @pytest.mark.parametrize("input_format", ["jsonl", "json"])
+    @pytest.mark.parametrize("exponent", [50000000, 999999999999999999])
+    def test_extreme_exponents_remain_compact(self, write_jsonl, input_format, exponent):
         # Arrange
-        old = write_jsonl("old.jsonl", ['{"id":1e50000000,"value":1e-50000000}'])
-        new = write_jsonl("new.jsonl", ['{"id":1e50000000,"value":1e-50000000}'])
+        record = '{"id":1e%d,"value":1e-%d}' % (exponent, exponent)
+        records = [record] if input_format == "jsonl" else ["[" + record + "]"]
+        old = write_jsonl("old." + input_format, records)
+        new = write_jsonl("new." + input_format, records)
 
         # Act
-        with diff(old, new, key="id") as result:
+        with diff(old, new, key="id", format=input_format) as result:
             summary = result.summary
 
         # Assert
@@ -1131,6 +1135,25 @@ class TestInputValidation:
 
         # Assert
         assert captured.value.line == 2
+
+    @pytest.mark.parametrize("input_format", ["jsonl", "json"])
+    @pytest.mark.parametrize("number", ["1e9999999999999999999", "1e-9999999999999999999"])
+    def test_unrepresentable_exponents_are_input_errors(self, write_jsonl, input_format, number):
+        old_records = ['{"id":1}']
+        new_records = ['{"id":1}', '{"id":2,"value":%s}' % number]
+        if input_format == "json":
+            old_records = ["[" + ",".join(old_records) + "]"]
+            new_records = ["[" + ",".join(new_records) + "]"]
+        old = write_jsonl("old." + input_format, old_records)
+        new = write_jsonl("new." + input_format, new_records)
+
+        with pytest.raises(InputError, match=r"invalid input \(InvalidOperation\)") as captured:
+            with diff(old, new, key="id", format=input_format):
+                pass
+
+        assert captured.value.source == "NEW"
+        if input_format == "jsonl":
+            assert captured.value.line == 2
 
     def test_blank_line_is_rejected_at_its_physical_line(self, tmp_path, write_jsonl):
         # Arrange
