@@ -12,7 +12,9 @@ deterministic, and disk-backed.
 [![Coverage](https://img.shields.io/codecov/c/github/rmoralespp/jsonl-diff?style=flat-square)](https://codecov.io/gh/rmoralespp/jsonl-diff)
 [![License](https://img.shields.io/github/license/rmoralespp/jsonl-diff?style=flat-square)](https://github.com/rmoralespp/jsonl-diff/blob/main/LICENSE)
 
-[Install](#install) · [Quick start](#quick-start) · [CLI](#cli) · [Python API](#python-api) · [Semantics](#comparison-semantics) · [Documentation](#documentation)
+[Install](#install) · [Quick start](#quick-start) · [CLI](#cli) ·
+[Python API](#python-api) · [Semantics](#comparison-semantics) ·
+[Documentation](#documentation)
 
 </div>
 
@@ -83,16 +85,16 @@ Property order and record order do not affect the result.
 ## CLI
 
 ```text
-jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where EXPRESSION]
+jsonl-diff [-h] --key KEY [--ignore IGNORE] [--where WHERE]
            [--duplicates {error,first,last}] [--missing-key {error,null}]
-           [--details FILE] [--field-diff] [--quiet]
-           [--schema-diff] [--schema-ignore POINTER] [--format {jsonl,json}]
+           [--details FILE] [--field-diff] [--schema-diff]
+           [--schema-ignore POINTER] [--quiet] [--format {jsonl,json}]
            old new
 ```
 
 | Option                    | Purpose                                                               |
 |---------------------------|-----------------------------------------------------------------------|
-| `old`, `new`              | Local path, HTTP/HTTPS source, or `-` for stdin                       |
+| `old`, `new`              | Local path, `file://` or HTTP/HTTPS URL, or `-` for stdin (not both)  |
 | `--key KEY`               | Top-level identity field; repeat or comma-separate for composite keys |
 | `--ignore POINTER`        | RFC 6901 field pointer excluded from content comparison               |
 | `--where EXPRESSION`      | JMESPath filter evaluated against each record                         |
@@ -167,7 +169,7 @@ Using the files from the quick start, `changes.jsonl` contains:
 
 The stream starts with comparison metadata, emits only changed identities in
 deterministic order, and finishes with the complete summary. See the
-[details format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md) for duplicate and schema events.
+[details format](docs/details-format.md) for duplicate and schema events.
 
 **See which fields changed**
 
@@ -186,13 +188,12 @@ per-field totals:
 {"added":0,"path":"/name","removed":0,"replaced":1,"type":"field_summary"}
 ```
 
-See [Field-level patches](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md#field-level-patches).
+See [Field-level patches](docs/details-format.md#field-level-patches).
 
 **Get every report from a single indexing pass**
 
-Indexing dominates the cost of a comparison, and each invocation indexes both
-inputs again. Instead of running separate summary, schema, and details
-commands, request them together and query the details file afterwards:
+Each invocation indexes both inputs again, so request the reports together and
+query the details file afterwards:
 
 ```bash
 jsonl-diff old.jsonl new.jsonl \
@@ -202,13 +203,10 @@ jsonl-diff old.jsonl new.jsonl \
   --field-diff
 
 # Later queries read report.jsonl instead of re-indexing the inputs.
-jq -c 'select(.type == "schema_change")' report.jsonl
 jq -c 'select(.type == "change" and .op == "modified")' report.jsonl
-jq -c 'select(.type == "field_summary")' report.jsonl
-jq -c 'select(.type == "summary")' report.jsonl
 ```
 
-See [Details format → Querying a report](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md#querying-a-report).
+See [Details format → Querying a report](docs/details-format.md#querying-a-report).
 
 **Read compressed inputs**
 
@@ -271,7 +269,7 @@ schema changes, and field summaries are then iterated lazily instead of being
 materialized in memory.
 
 Applications must protect the entry point because indexing uses worker
-processes. See [Parallel indexing](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/parallel-indexing.md#application-entry-points)
+processes. See [Parallel indexing](docs/parallel-indexing.md#application-entry-points)
 for the multiprocessing requirements.
 
 The immutable result models include:
@@ -289,7 +287,7 @@ The public exception hierarchy is rooted at `JsonlDiffError`:
 - `DuplicateKeyError`
 - `ResourceError`
 
-See the [Python API reference](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/python-api.md) for the complete signature,
+See the [Python API reference](docs/python-api.md) for the complete signature,
 models, iterator behavior, numeric key semantics, and error hierarchy.
 
 ## Comparison semantics
@@ -313,25 +311,26 @@ The comparison is intentionally strict:
 `--ignore` excludes fields from content comparison. `--schema-ignore`
 independently excludes fields from observed-schema profiling.
 
-Read [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) for duplicate rules,
+Read [Comparison semantics](docs/comparison-semantics.md) for duplicate rules,
 ignore-pointer edge cases, filter order, schema inference, and numeric behavior.
 
 ## Sources and compression
 
-| Source             |     CLI      |  Python API  |
-|--------------------|:------------:|:------------:|
-| Local path         |     Yes      |     Yes      |
-| HTTP/HTTPS URL     |     Yes      |     Yes      |
-| File-like object   |      No      |     Yes      |
-| gzip (`.gz`)       |     Yes      |     Yes      |
-| bzip2 (`.bz2`)     |     Yes      |     Yes      |
-| xz (`.xz`)         |     Yes      |     Yes      |
-| Zstandard (`.zst`) | Python 3.14+ | Python 3.14+ |
-| ZIP archive        |      No      |      No      |
+| Source                      |     CLI      |  Python API  |
+|-----------------------------|:------------:|:------------:|
+| Local path (`str`/`Path`)   |     Yes      |     Yes      |
+| `file://` or HTTP/HTTPS URL |     Yes      |     Yes      |
+| Standard input (`-`)        |     Yes      |      No      |
+| File-like object            |      No      |     Yes      |
+| gzip (`.gz`)                |     Yes      |     Yes      |
+| bzip2 (`.bz2`)              |     Yes      |     Yes      |
+| xz (`.xz`)                  |     Yes      |     Yes      |
+| Zstandard (`.zst`)          | Python 3.14+ | Python 3.14+ |
+| ZIP archive                 |      No      |      No      |
 
 Source opening and decompression are delegated to `py-jsonl`. File-like inputs
 and stdin are staged in the private temporary workspace so both indexing
-workers can reopen them.
+workers can reopen them (see [Architecture](docs/architecture.md#sources-and-compression)).
 
 ## Scope
 
@@ -349,13 +348,13 @@ editor. It intentionally does not provide:
 
 ## Documentation
 
-| Guide                                                                                                   | Covers                                                             |
-|---------------------------------------------------------------------------------------------------------|--------------------------------------------------------------------|
-| [Comparison semantics](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/comparison-semantics.md) | Identity, duplicates, ignores, filtering, numbers, and determinism |
-| [Disk-backed architecture](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/architecture.md)     | SQLite indexes, temporary storage, cleanup, and source handling    |
-| [Parallel indexing](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/parallel-indexing.md)       | Worker lifecycle, database merge, recovery, and entry points       |
-| [Details format](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/details-format.md)             | Machine-readable JSONL event contract                              |
-| [Python API](https://github.com/rmoralespp/jsonl-diff/blob/main/docs/python-api.md)                     | Complete signature, models, iterators, and errors                  |
+| Guide | Covers |
+|---|---|
+| [Comparison](docs/comparison-semantics.md) | Identity, duplicates, filtering, and comparison rules |
+| [Architecture](docs/architecture.md) | SQLite index, temporary storage, cleanup, and sources |
+| [Parallel indexing](docs/parallel-indexing.md) | Workers, recovery, and application entry points |
+| [Details format](docs/details-format.md) | JSONL report contract |
+| [Python API](docs/python-api.md) | Signature, models, iterators, and errors |
 
 ## Development
 
@@ -366,9 +365,6 @@ uv run ruff check --quiet --output-format=concise .
 # Tests
 uv run python -Wd -m pytest tests/ --cov
 ```
-
-The suite covers CLI behavior, identity and canonicalization, validation,
-details output, field-level patches, source handling, compression, parallel indexing, and cleanup.
 
 ## License
 

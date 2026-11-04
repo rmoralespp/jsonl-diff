@@ -56,23 +56,37 @@ def diff(
     ...
 ```
 
+Parameters:
+
+- `old`, `new`: path (`str`/`os.PathLike`), `file://` or HTTP/HTTPS URL, or a
+  file-like object.
+- `key`: identity field name, or a sequence of names for a composite identity.
+- `ignore`: RFC 6901 pointers excluded from content comparison.
+- `where`: JMESPath expression selecting the participating records.
+- `duplicates`: `DuplicatePolicy` or its value; `"error"` (default) rejects
+  duplicates, `"first"`/`"last"` keep that occurrence.
+- `missing_key`: `MissingKeyPolicy` or its value; `"error"` (default) rejects
+  absent identity fields, `"null"` treats them as `null`.
+- `schema_diff`: compare observed fields, types, nullability, and requiredness.
+- `schema_ignore`: RFC 6901 pointers excluded from schema profiling; requires
+  `schema_diff=True`.
+- `format`: `"jsonl"` (default) or `"json"` for one top-level array.
+- `field_diff`: compute RFC 6902 patches for modified records.
+
 `diff()` creates a comparison session without opening either source. Entering
 its context fully reads, indexes, and validates both sources before exposing
 the result. `DiffResult.changes()` is then a lazy iterator over the disk-backed
 result rather than a list held in memory.
 
-Entering the context indexes OLD and NEW in separate worker processes.
-Depending on how Python starts those processes, each can re-import your
-application's `__main__` module, so code that starts a comparison must sit
-behind an `if __name__ == "__main__":` guard; otherwise it may rerun
-module-level code or fail to start. The `python -m jsonl_diff` and installed
-`jsonl-diff` CLI entry points are already safe. See
-[Parallel indexing → Application entry points](parallel-indexing.md#application-entry-points).
+Entering the context indexes OLD and NEW in separate worker processes, so code
+that starts a comparison must sit behind an `if __name__ == "__main__":` guard.
+See [Parallel indexing → Application entry points](parallel-indexing.md#application-entry-points).
 
 `format="jsonl"` (the default) reads one JSON object per line. Use
 `format="json"` for sources containing one top-level JSON array; its elements
-are parsed incrementally with `ijson`. Both formats support the same local,
-remote, compressed, and file-like sources.
+are parsed incrementally with `ijson`, and reported locations are one-based
+element ordinals instead of physical lines. Both formats support the same
+sources.
 
 Using `DiffResult` as a context manager is required. It owns the temporary
 resources and removes its private workspace on exit. A result cannot be entered
@@ -117,9 +131,10 @@ Each item from `result.changes()` is an immutable `Change` with:
 
 - `operation`: a `ChangeOperation` enum value (`ADDED`, `DELETED`, or `MODIFIED`);
 - `key`: a typed tuple in normalized identity-field order;
-- `old` and `new`: optional `SourceLocation` values;
+- `old` and `new`: optional `SourceLocation(source, line)` values, where `source`
+  is `"OLD"` or `"NEW"`;
 - `old_line` and `new_line`: convenience properties returning a one-based
-  physical line or `None`;
+  physical line (element ordinal for `format="json"`) or `None`;
 - `patch`: field-level changes for modified records with `field_diff=True`,
   otherwise `None`.
 
@@ -215,11 +230,15 @@ compare equal in Python.
 
 The public error hierarchy starts with `JsonlDiffError`:
 
-- `ConfigurationError`: invalid keys, ignore pointers, or schema options;
+- `ConfigurationError`: invalid options (identity fields, ignore pointers,
+  `where` expression, `duplicates`, `missing_key`, `format`, or
+  `schema_ignore` without `schema_diff`); also a `ValueError`;
 - `InputError`: an invalid source or record, or a source changed during a
-  field-diff reread; exposes `source` and optional `line`;
+  field-diff reread; exposes `source` and optional `line`. Ignore pointers
+  that traverse an array are reported this way when a record contains one;
 - `DuplicateKeyError`: an `InputError` with `key` and the first/repeated physical lines in `lines`;
-- `ResourceError`: the temporary index cannot be created or written.
+- `ResourceError`: the temporary index or indexing workers cannot be created,
+  accessed, or written.
 
 Failures during `diff()` clean up the workspace before the exception is
 raised.

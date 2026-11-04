@@ -28,20 +28,17 @@ input and duplicate validation.
 ## Identity and duplicates
 
 Identity fields are top-level object-member names. Each component must exist
-and be a JSON value: strings, numbers, booleans, objects, and arrays are
-allowed, as is (for composite identities only) `null`. A single-field identity
-may not be `null`,
-since that would collapse every `null` record into one indistinguishable
-identity; a `null` value is only tolerated as one component of a composite
-(multi-field) identity. Uniqueness is still enforced on the complete
-identity tuple, so a tuple containing only `null` values can still collide.
-Nested identity paths and automatic key detection are not supported.
+and be a JSON value: a string, number, boolean, object, or array. `null` is
+allowed only as one component of a composite (multi-field) identity; a
+single-field identity may not be `null`, since that would collapse every `null`
+record into one identity. Uniqueness is always enforced on the complete
+identity tuple, so a tuple of only `null` values can still collide. Nested
+identity paths and automatic key detection are not supported.
 
-By default, a record missing a configured identity field aborts the comparison with `InputError`. 
-Set `missing_key="null"` (`--missing-key null` on the CLI) to treat missing fields like explicit `null`: allowed 
-composite identities but subject to collision risk (`DuplicateKeyError`/duplicate-policy handling), and rejected 
-single-field identities for the same reason as explicit `null`.
-
+By default, a record missing a configured identity field aborts the comparison
+with `InputError`. Set `missing_key="null"` (`--missing-key null` on the CLI)
+to treat a missing field like an explicit `null`, with the same rules: allowed
+in composite identities, rejected in single-field identities.
 
 Composite identity field names are sorted lexically before their values are
 extracted. Consequently, `key=("b", "a")` and `key=("a", "b")` both produce
@@ -81,8 +78,9 @@ and `/updated_at` does not match `/metadata/updated_at`.
 
 Ignores are applied symmetrically before content canonicalization. A pointer
 may remove an entire array-valued object member, but it may not traverse an
-array or address an array element. Ignoring a top-level identity field is also
-invalid. Wildcards, JSONPath, and recursive name matching are not supported.
+array or address an array element; a record where it would is reported as
+`InputError`. Ignoring a top-level identity field is a `ConfigurationError`.
+Wildcards, JSONPath, and recursive name matching are not supported.
 
 ## Filtering with `--where`
 
@@ -104,11 +102,10 @@ participate at all, and `--ignore` defines which fields are excluded from
 content comparison once a record has been selected.
 
 The expression is parsed and validated once, before either input is read; an
-invalid expression is a `ConfigurationError` (CLI exit code `3`). The parsed
-expression is then reused for every record; it is never recompiled inside the
-per-record loop. `--where` is applied independently to OLD and to NEW, so a
-record may be filtered out of one side and kept on the other, which is
-reported like any other addition or deletion.
+invalid expression is a `ConfigurationError` (CLI exit code `3`). `--where` is
+applied independently to OLD and to NEW, so a record may be filtered out of one
+side and kept on the other, which is reported like any other addition or
+deletion.
 
 JSON literals in a JMESPath expression are written between backticks, so a
 string value must be quoted twice: `` `"ES"` ``. The bare form `` `ES` `` also

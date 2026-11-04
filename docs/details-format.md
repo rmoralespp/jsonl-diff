@@ -114,18 +114,14 @@ meanwhile, the run fails with exit code `2`.
 ## Querying a report
 
 Every invocation indexes both inputs, and indexing dominates the cost of a
-comparison. Since a details file already contains the summary, schema changes
+comparison. A details file already contains the summary, schema changes
 (with `--schema-diff`), duplicates, record changes, and field patches (with
-`--field-diff`), one run can replace several:
+`--field-diff`), so one run can replace several. The report is plain JSONL, so
+any line-oriented tool can query it without re-indexing, for example with `jq`:
 
 ```bash
 jsonl-diff old.jsonl new.jsonl --key id --schema-diff --details report.jsonl --field-diff --quiet
-```
 
-The report is plain JSONL, so any line-oriented tool can query it without
-re-indexing the inputs. For example, with `jq`:
-
-```bash
 # Summary totals, including the nested schema totals
 jq -c 'select(.type == "summary")' report.jsonl
 
@@ -138,17 +134,21 @@ jq -c 'select(.type == "change" and .op == "modified") | .key' report.jsonl
 # Number of added records
 jq -s 'map(select(.type == "change" and .op == "added")) | length' report.jsonl
 
-# Fields that changed most often
+# Per-path field change totals
 jq -c 'select(.type == "field_summary")' report.jsonl
 ```
 
 Options that change which records are compared, how they are compared, or
 what the report contains (`--key`, `--ignore`, `--where`, `--duplicates`,
-`--missing-key`, `--schema-ignore`, `--format`, `--field-diff`) require a new
-run; the `meta` record states the configuration a report was produced with.
+`--missing-key`, `--schema-diff`, `--schema-ignore`, `--field-diff`,
+`--format`) require a new run. The `meta` record contains the comparison
+options, with `schema_diff` and `field_diff` included only when enabled. It
+does not record `--format` or presentation/output options such as `--quiet`
+and the `--details` path.
 
 ## Notes
 
 The normal stdout summary is unchanged when `--details` is used, unless
 `--quiet` suppresses it. A write failure can leave a partial details file and
-returns exit code `2`.
+returns exit code `2`. For `--format json` sources, `old_line`/`new_line` hold
+one-based array-element ordinals rather than physical lines.

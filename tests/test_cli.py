@@ -143,6 +143,16 @@ class TestCliExitCodes:
         assert captured_exit.value.code == 3
         assert "the following arguments are required: --key" in captured.err
 
+    def test_help_describes_options_and_exit_codes(self, capsys):
+        with pytest.raises(SystemExit) as captured_exit:
+            main(["--help"])
+        captured = capsys.readouterr()
+
+        assert captured_exit.value.code == 0
+        assert "JMESPath expression" in captured.out
+        assert "file:// or HTTP/HTTPS URL" in captured.out
+        assert "Exit codes:" in captured.out
+
     def test_where_filters_records_before_comparison(self, write_jsonl, capsys):
         # Arrange
         old = write_jsonl(

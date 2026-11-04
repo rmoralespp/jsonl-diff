@@ -99,7 +99,7 @@ class DuplicateKeyError(InputError):
 
 
 class ResourceError(JsonlDiffError):
-    """Raised when a resource limit prevents comparison."""
+    """Raised when the temporary index or its indexing workers cannot be created, accessed, or written."""
 
 
 class ChangeOperation(str, Enum):
@@ -1969,28 +1969,63 @@ class _ArgumentParser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = _ArgumentParser(prog="jsonl-diff")
-    parser.add_argument("old")
-    parser.add_argument("new")
-    parser.add_argument("--key", action="append", required=True)
-    parser.add_argument("--ignore", action="append", default=[])
-    parser.add_argument("--where")
+    parser = _ArgumentParser(
+        prog="jsonl-diff",
+        description="Compare two JSONL/NDJSON datasets or top-level JSON arrays by record identity.",
+        epilog="Exit codes: 0 no differences, 1 differences found, 2 input/resource/output failure, 3 invalid usage.",
+    )
+    parser.add_argument("old", help="OLD source: local path, file:// or HTTP/HTTPS URL, or '-' for stdin")
+    parser.add_argument("new", help="NEW source: local path, file:// or HTTP/HTTPS URL, or '-' for stdin")
+    parser.add_argument(
+        "--key",
+        action="append",
+        required=True,
+        help="top-level identity field; repeat or comma-separate for a composite identity",
+    )
+    parser.add_argument(
+        "--ignore",
+        action="append",
+        default=[],
+        help="RFC 6901 pointer excluded from content comparison (repeatable)",
+    )
+    parser.add_argument("--where", help="JMESPath expression selecting the records that participate")
     parser.add_argument(
         "--duplicates",
         choices=tuple(policy.value for policy in DuplicatePolicy),
         default=DuplicatePolicy.ERROR.value,
+        help="reject duplicate identities or keep the first/last occurrence (default: %(default)s)",
     )
     parser.add_argument(
         "--missing-key",
         choices=tuple(policy.value for policy in MissingKeyPolicy),
         default=MissingKeyPolicy.ERROR.value,
+        help="reject absent identity fields or treat them as null (default: %(default)s)",
     )
-    parser.add_argument("--details", metavar="FILE")
-    parser.add_argument("--field-diff", action="store_true")
-    parser.add_argument("--schema-diff", action="store_true")
-    parser.add_argument("--schema-ignore", action="append", default=[], metavar="POINTER")
-    parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--format", choices=("jsonl", "json"), default="jsonl")
+    parser.add_argument("--details", metavar="FILE", help="write the JSONL change report to FILE")
+    parser.add_argument(
+        "--field-diff",
+        action="store_true",
+        help="add RFC 6902 patches to modified records in the details report (requires --details)",
+    )
+    parser.add_argument(
+        "--schema-diff",
+        action="store_true",
+        help="compare observed fields, types, nullability, and requiredness",
+    )
+    parser.add_argument(
+        "--schema-ignore",
+        action="append",
+        default=[],
+        metavar="POINTER",
+        help="RFC 6901 pointer excluded from schema profiling (repeatable; requires --schema-diff)",
+    )
+    parser.add_argument("--quiet", action="store_true", help="suppress the human-readable summary")
+    parser.add_argument(
+        "--format",
+        choices=("jsonl", "json"),
+        default="jsonl",
+        help="read JSON Lines or one top-level JSON array (default: %(default)s)",
+    )
     return parser
 
 

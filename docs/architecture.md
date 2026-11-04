@@ -46,13 +46,11 @@ observed-schema profile in the same SQLite workspace. The profile stores one
 aggregate row per source and RFC 6901 field path, plus object-occurrence counts
 used to distinguish a missing field from an explicit `null`.
 
-Per-record observations are accumulated in small Python dictionaries and
-flushed to SQLite every 1024 physical lines. SQLite upserts add the batch
-counts, so profiling does not perform one database write for every field in
-every record. Memory scales with the distinct paths in the current batch and
-record; disk usage scales with distinct observed paths rather than the number
-of records. Datasets with dynamic property names can still create large
-profiles.
+Observations are accumulated in memory and flushed to SQLite every 1024
+physical lines, so profiling does not write once per field per record. Memory
+scales with the distinct paths in the current batch; disk usage scales with
+distinct observed paths rather than the number of records. Datasets with
+dynamic property names can still create large profiles.
 
 Schema profiling happens during the original input pass and does not retain
 complete records or reread a source. It therefore works with stdin, remote,
@@ -69,19 +67,15 @@ and digest, otherwise entering the context fails with `InputError`
 sources are decompressed again, `--format json` is fully reparsed, and URLs are
 downloaded again; staged stdin and file-like inputs use the workspace copy.
 
-Verified bodies go to a `field_bodies` table indexed by side and identity
-(about twice the canonical size of the modified records). Insertion batches
-are flushed at 2048 bodies or 8 MiB of canonical body bytes, whichever comes
-first. The byte threshold is checked after adding each body, so one large
-record can exceed it and is flushed immediately. This is not a total RAM
-limit: decoded records, identities, Python objects, and database buffers also
-consume memory. `changes()` computes
-each patch lazily, comparing undecoded members as bytes and decoding only
-changed values. `field_summary` totals are buffered per batch and merged into a
-`field_counts` table keyed by path, so dynamic property names spill to disk
-instead of growing memory. The table is built once per result, during the
-details pass or the first `DiffResult.field_summary()` call, and reused by
-later reads. Without field diff nothing is reread.
+Verified bodies are stored in a temporary table indexed by side and identity
+(about twice the canonical size of the modified records), flushed in batches of
+at most 2048 bodies or 8 MiB of canonical bytes. A single larger body is
+flushed on its own, so this is not a total RAM limit. `changes()` computes each
+patch lazily, comparing undecoded members as bytes and decoding only changed
+values. `field_summary` totals are merged into a table keyed by path, so
+dynamic property names spill to disk instead of growing memory. The totals are
+built once per result, during the details pass or the first
+`DiffResult.field_summary()` call. Without field diff nothing is reread.
 
 ## Cleanup
 
@@ -94,24 +88,14 @@ emitted as warnings rather than replacing the primary error.
 ## Sources and compression
 
 Source opening and decompression are delegated to
-[`py-jsonl`](https://github.com/rmoralespp/jsonl).
-JSONL input is decoded by `py-jsonl`; `--format json` opens the same
-decompressed byte stream with `py-jsonl.open_stream()` and parses top-level
-array elements incrementally with `ijson`.
+[`py-jsonl`](https://github.com/rmoralespp/jsonl). `--format json` opens the
+same decompressed byte stream with `jsonl.open_stream()` and parses top-level
+array elements incrementally with `ijson`. The supported sources and
+compression formats are listed in the
+[README](../README.md#sources-and-compression).
 
-| Source             |       CLI        |           Python API            |
-|--------------------|:----------------:|:-------------------------------:|
-| Local path         |       Yes        | Yes, including path-like values |
-| HTTP/HTTPS URL     |       Yes        |               Yes               |
-| File-like object   |        No        |               Yes               |
-| gzip (`.gz`)       |       Yes        |               Yes               |
-| bzip2 (`.bz2`)     |       Yes        |               Yes               |
-| xz (`.xz`)         |       Yes        |               Yes               |
-| Zstandard (`.zst`) |   Python 3.14+   |          Python 3.14+           |
-| ZIP archive        |        No        |               No                |
-
-Zstandard availability follows `py-jsonl` and its use of the standard-library
-zstd support added in Python 3.14; it is not supported by this project on earlier
-Python versions. Compression and HTTP transfer boundaries do not affect the
-reported decoded JSONL line numbers. For `--format json`, the corresponding
-locations are one-based array-element ordinals rather than physical lines.
+Zstandard follows `py-jsonl`, which relies on the standard-library zstd support
+added in Python 3.14, so `.zst` is unsupported on earlier Python versions.
+Compression and HTTP transfer do not affect the reported line numbers: they
+are decoded physical lines for JSONL and one-based array-element ordinals for
+`--format json`.

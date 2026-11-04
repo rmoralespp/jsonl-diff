@@ -41,9 +41,6 @@ jsonl-diff = "jsonl_diff:main"
 py-modules = ["jsonl_diff"]
 
 [dependency-groups]
-doc = [
-    "zensical"
-]
 test = [
     "pytest",
     "coverage",
@@ -60,7 +57,6 @@ Source = "https://github.com/rmoralespp/jsonl-diff"
 Homepage = "https://github.com/rmoralespp/jsonl-diff"
 Changelog = "https://github.com/rmoralespp/jsonl-diff/blob/main/CHANGELOG.md"
 Issues = "https://github.com/rmoralespp/jsonl-diff/issues"
-Documentation = "https://rmoralespp.github.io/jsonl-diff/"
 
 [tool.coverage.run]
 branch = true
