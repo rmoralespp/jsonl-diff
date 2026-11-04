@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+* **Changed:** Update test dependencies `coverage` to 7.17.1 and `pytest` to 9.2.0.
 * **Changed:** `jsonl-diff --help` now describes every option and the exit codes.
 * **Docs:** Document stdin and `file://` sources, the `diff()` parameters, and the `meta` fields
   (`format` is not recorded); align the README CLI synopsis with the actual usage, correct the
