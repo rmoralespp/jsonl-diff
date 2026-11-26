@@ -451,6 +451,28 @@ class TestSequentialIndexing:
         # Assert
         assert (_SpuriousConflictCursor.raised, equal) == (True, 2)
 
+    def test_partial_staged_bodies_from_failed_worker_are_rewritten(self, tmp_path, monkeypatch):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1,"v":1},{"id":2,"v":1}]', encoding="utf-8")
+        new.write_text('[{"id":1,"v":1},{"id":2,"v":2}]', encoding="utf-8")
+
+        def failed_worker(target, args, daemon):
+            with open(args[4], "wb") as stream:
+                stream.write(b"partial")
+            return _FakeWorker(exitcode=1)
+
+        context = types.SimpleNamespace(Process=failed_worker)
+        monkeypatch.setattr(jsonl_diff, "_multiprocessing_context", lambda: context)
+
+        # Act
+        with diff(old, new, key="id", format="json", field_diff=True) as result:
+            patches = [[(item.old, item.value) for item in change.patch] for change in result.changes()]
+
+        # Assert
+        assert patches == [[(1, 2)]]
+
 
 class TestStreamSources:
     def test_text_stream_ok(self):

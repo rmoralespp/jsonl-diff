@@ -146,8 +146,9 @@ With `field_diff=True`, modified changes carry `Change.patch`, a tuple of
 `FieldChange(op, path, old, value)` where `op` is a `FieldOperation` (`str`
 enum: `"add"`, `"remove"`, `"replace"`); otherwise `patch` is `None`. Values
 keep their parsed types, so a `Change` with a patch may not be hashable.
-Entering the context fails with `InputError` if a source changed after
-indexing. See [Field-level patches](details-format.md#field-level-patches).
+Entering the context fails with `InputError` if a JSONL source changed after
+indexing; `format="json"` bodies are staged during indexing instead. See
+[Field-level patches](details-format.md#field-level-patches).
 
 ```python
 with diff("old.jsonl", "new.jsonl", key="id", field_diff=True) as result:

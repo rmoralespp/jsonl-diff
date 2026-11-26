@@ -1,3 +1,4 @@
+import io
 import json
 import sqlite3
 import sys
@@ -1763,6 +1764,68 @@ class TestFieldDiff:
         assert [(item.op, item.path, item.old, item.value) for item in change.patch] == [
             ("replace", "/v", Decimal("1.0"), Decimal("1.00")),
         ]
+
+    def test_json_array_patches_use_bodies_staged_while_indexing(self, tmp_path, monkeypatch):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1,"v":1,"s":"a\\nb"},{"id":2,"v":1},{"id":3,"v":1}]', encoding="utf-8")
+        new.write_text('[{"id":3,"v":2},{"id":2,"v":1},{"id":1,"v":2,"s":"a\\nb"}]', encoding="utf-8")
+        original = DiffResult._store_field_bodies
+        staged = []
+
+        def rewrite_then_store(result):
+            staged.extend(result._body_paths)
+            old.write_text("[]", encoding="utf-8")
+            new.unlink()
+            original(result)
+
+        monkeypatch.setattr(DiffResult, "_store_field_bodies", rewrite_then_store)
+
+        # Act
+        with diff(old, new, key="id", format="json", where="id != `2`", field_diff=True) as result:
+            patches = [
+                (change.key[0], [(item.old, item.value) for item in change.patch]) for change in result.changes()
+            ]
+            leftover = [path for path in staged if Path(path).exists()]
+
+        # Assert
+        assert patches == [(1, [(1, 2)]), (3, [(1, 2)])]
+        assert leftover == []
+
+    def test_staged_bodies_flush_once_the_byte_limit_is_reached(self, monkeypatch):
+        # Arrange
+        monkeypatch.setattr(jsonl_diff, "_FIELD_BODY_BATCH_BYTES", 10)
+        stream = io.BytesIO()
+        stager = jsonl_diff._BodyStager(stream)
+
+        # Act
+        stager.add(b'{"a":1}')
+        before_limit = stream.getvalue()
+        stager.add(b'{"b":2}')
+
+        # Assert
+        assert (before_limit, stream.getvalue()) == (b"", b'{"a":1}\n{"b":2}\n')
+
+    def test_corrupted_staged_body_is_rejected(self, tmp_path, monkeypatch):
+        # Arrange
+        old = tmp_path / "old.json"
+        new = tmp_path / "new.json"
+        old.write_text('[{"id":1,"v":1}]', encoding="utf-8")
+        new.write_text('[{"id":1,"v":2}]', encoding="utf-8")
+        original = DiffResult._store_field_bodies
+
+        def corrupt_then_store(result):
+            with open(result._body_paths[1], "wb") as stream:
+                stream.write(b'{"id":1,"v":3}\n')
+            original(result)
+
+        monkeypatch.setattr(DiffResult, "_store_field_bodies", corrupt_then_store)
+
+        # Act / Assert
+        with pytest.raises(InputError, match="source changed during comparison in NEW at line 1"):
+            with diff(old, new, key="id", format="json", field_diff=True):
+                pass
 
     @pytest.mark.parametrize(
         "rewritten",

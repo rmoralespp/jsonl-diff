@@ -756,6 +756,60 @@ class _FieldCounter:
             self._pending.clear()
 
 
+class _BodyStager:
+    """
+    Stage the canonical body of every top-level array item during indexing.
+
+    One line per item keeps physical line numbers aligned with the index;
+    items skipped by `where` stay as empty lines. Canonical JSON never holds a
+    raw newline, so the field-diff reread splits lines without decoding them.
+    """
+
+    __slots__ = ("_stream", "_pending", "_pending_bytes")
+
+    def __init__(self, stream: Any):
+        self._stream = stream
+        self._pending = []
+        self._pending_bytes = 0
+
+    def add(self, canonical: bytes) -> None:
+        self._pending.append(canonical)
+        self._pending_bytes += len(canonical)
+        if len(self._pending) >= _INSERT_BATCH or self._pending_bytes >= _FIELD_BODY_BATCH_BYTES:
+            self.flush()
+
+    def flush(self) -> None:
+        """Write pending bodies through to the file, so closing it cannot fail on buffered data."""
+        if self._pending:
+            self._pending.append(b"")
+            chunk = b"\n".join(self._pending)
+            self._pending.clear()
+            self._pending_bytes = 0
+        else:
+            chunk = b""
+        try:
+            self._stream.write(chunk)
+            self._stream.flush()
+        except OSError as error:
+            raise ResourceError("could not write the temporary input") from error
+
+
+def _close_quietly(stream: Any) -> None:
+    # A successful pass has already flushed, so closing only fails on a path
+    # that is already raising; that error must not replace the original one.
+    with contextlib.suppress(OSError):
+        stream.close()
+
+
+def _staged_bodies(path: str) -> Iterator[bytes]:
+    try:
+        with open(path, "rb") as stream:
+            for line in stream:
+                yield line[:-1]
+    except OSError as error:
+        raise ResourceError("could not read the temporary input") from error
+
+
 class _TopLevelArrayReader:
     """Validate the root value without interrupting ijson's native items pipeline."""
 
@@ -818,7 +872,13 @@ def _multiprocessing_context() -> Any:
     return multiprocessing.get_context()
 
 
-def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") -> None:
+def _index_worker(
+    db_path: str,
+    source: str,
+    side: int,
+    config: "DiffConfig",
+    bodies_path: Optional[str] = None,
+) -> None:
     """
     Index one side into a private database, or exit non-zero on failure.
 
@@ -829,7 +889,7 @@ def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") ->
     result = None
     try:
         result = DiffResult(source, source, config)
-        result._index_into(db_path, source, side)
+        result._index_into(db_path, source, side, bodies_path)
     except BaseException:
         if result is not None:
             result.close()
@@ -839,8 +899,19 @@ def _index_worker(db_path: str, source: str, side: int, config: "DiffConfig") ->
     result.close()
 
 
-def _start_worker(context: Any, db_path: str, source: str, side: int, config: "DiffConfig") -> Any:
-    process = context.Process(target=_index_worker, args=(db_path, source, side, config), daemon=True)
+def _start_worker(
+    context: Any,
+    db_path: str,
+    source: str,
+    side: int,
+    config: "DiffConfig",
+    bodies_path: Optional[str] = None,
+) -> Any:
+    process = context.Process(
+        target=_index_worker,
+        args=(db_path, source, side, config, bodies_path),
+        daemon=True,
+    )
     try:
         process.start()
     except OSError as error:
@@ -886,6 +957,7 @@ class DiffResult:
         self._field_counts_ready = False
         self._field_counter = None
         self._sources = None
+        self._body_paths = None
         self._started = False
 
     def _open_workspace(self) -> None:
@@ -1291,7 +1363,13 @@ class DiffResult:
             return _identity(record, self.config.key, self.config.missing_key)
         return (value,)
 
-    def _insert_records(self, records: Iterable[Any], side: int, source: str):
+    def _insert_records(
+        self,
+        records: Iterable[Any],
+        side: int,
+        source: str,
+        stager: Optional[_BodyStager] = None,
+    ):
         cursor = self._connection.cursor()
         schema_fields = {}
         schema_objects = {}
@@ -1308,6 +1386,8 @@ class DiffResult:
                 except (TypeError, ValueError, DecimalException) as error:
                     raise InputError(str(error), source, line) from error
                 if not matched:
+                    if stager is not None:
+                        stager.add(b"")
                     if self.config.schema_diff and line % _SCHEMA_FLUSH_INTERVAL == 0:
                         if pending:
                             self._flush_record_batch(cursor, pending, source)
@@ -1326,6 +1406,8 @@ class DiffResult:
                 length, digest = _fingerprint(canonical)
             except (TypeError, ValueError) as error:
                 raise InputError(str(error), source, line) from error
+            if stager is not None:
+                stager.add(canonical)
             if self.config.schema_diff:
                 try:
                     _profile_schema(
@@ -1352,6 +1434,8 @@ class DiffResult:
                 self._flush_schema_profile(cursor, side, schema_fields, schema_objects)
         if pending:
             self._flush_record_batch(cursor, pending, source)
+        if stager is not None:
+            stager.flush()
         if self.config.schema_diff:
             self._flush_schema_profile(cursor, side, schema_fields, schema_objects)
 
@@ -1427,20 +1511,31 @@ class DiffResult:
             )
             fields.clear()
 
-    def _index_into(self, db_path: str, source: Any, side: int) -> None:
+    def _index_into(self, db_path: str, source: Any, side: int, bodies_path: Optional[str] = None) -> None:
         """Index one side into the private database at `db_path` (worker entry point)."""
         self._open_connection(db_path)
-        self._index(source, side)
+        self._index(source, side, bodies_path)
         self._connection.commit()
 
-    def _index(self, source: Any, side: int):
+    def _index(self, source: Any, side: int, bodies_path: Optional[str] = None):
         name = _SIDE_NAMES[side]
-        self._read_source(
-            lambda on_error: _records(source, on_error, self.config.format),
-            lambda records: self._insert_records(records, side, name),
-            name,
-            "could not build the temporary index",
-        )
+        with contextlib.ExitStack() as stack:
+            stager = None
+            if bodies_path is not None:
+                # Opening truncates, so the sequential recovery pass rewrites
+                # any partial file left by a failed worker.
+                try:
+                    stream = open(bodies_path, "wb")  # noqa: SIM115 -- closed by the exit stack
+                except OSError as error:
+                    raise ResourceError("could not write the temporary input") from error
+                stack.callback(_close_quietly, stream)
+                stager = _BodyStager(stream)
+            self._read_source(
+                lambda on_error: _records(source, on_error, self.config.format),
+                lambda records: self._insert_records(records, side, name, stager),
+                name,
+                "could not build the temporary index",
+            )
 
     def _read_source(
         self,
@@ -1484,13 +1579,21 @@ class DiffResult:
         ]
         # Staged paths stay reopenable after indexing for the field-diff reread.
         self._sources = sources
+        if self.config.field_diff and self.config.format == "json":
+            # Reparsing a whole array to recover a few bodies dominates field
+            # diff, so canonical bodies are staged while indexing instead.
+            self._body_paths = [
+                os.path.join(self._workspace.name, "bodies{}.jsonl".format(side))
+                for side in (0, 1)
+            ]
+        body_paths = self._body_paths or (None, None)
         # `fork` inherits the compiled `--where` expression and every other
         # start method pickles it; either way the worker gets the config as it
         # stands here.
         workers = []
         try:
             for side, source in enumerate(sources):
-                workers.append(_start_worker(context, paths[side], source, side, self.config))
+                workers.append(_start_worker(context, paths[side], source, side, self.config, body_paths[side]))
             failed = _join_workers(workers)
         except BaseException:
             # Stop workers before the caller removes the workspace they write to.
@@ -1522,8 +1625,8 @@ class DiffResult:
             # and OLD-before-NEW ordering the sequential path always produced.
             # A failure that does not reproduce was transient, and this pass
             # simply succeeds.
-            self._index(sources[0], 0)
-            self._index(sources[1], 1)
+            self._index(sources[0], 0, body_paths[0])
+            self._index(sources[1], 1, body_paths[1])
 
     def _parallel_source(self, source: Any, side: int) -> str:
         if isinstance(source, (str, os.PathLike)):
@@ -1647,10 +1750,22 @@ class DiffResult:
         Keep the canonical OLD and NEW bodies of every modified identity.
 
         The index holds only fingerprints, so field patches need the contents
-        again. Each source is reread sequentially and only the modified lines
-        are decoded. Every body must reproduce its indexed fingerprint: a
-        source that changed between passes fails here, before any output.
+        again. JSONL sources are reread sequentially and only the modified
+        lines are decoded; top-level arrays read the canonical bodies staged
+        while indexing, so they are neither reparsed nor read twice. Every body
+        must reproduce its indexed fingerprint: a source that changed between
+        passes fails here, before any output.
         """
+        try:
+            self._store_modified_bodies()
+        finally:
+            for path in self._body_paths or ():
+                # The staged bodies are as large as the normalized inputs and
+                # are no longer needed once the modified ones are stored.
+                with contextlib.suppress(OSError):
+                    os.remove(path)
+
+    def _store_modified_bodies(self) -> None:
         message = "could not write the temporary index"
         with _sqlite_resource(message):
             # A rowid table appends bodies in physical-line order; one index
@@ -1678,12 +1793,19 @@ class DiffResult:
 
     def _store_side_bodies(self, source: str, side: int) -> None:
         name = _SIDE_NAMES[side]
-        input_format = self.config.format
-        # Undecoded JSONL lines keep the reread cheap: only modified lines are
-        # parsed. Top-level array items already arrive decoded.
-        parse = _INPUT_DECODER.decode if input_format == "jsonl" else None
+        staged = None if self._body_paths is None else self._body_paths[side]
+
+        def read(on_error: Callable[[int, Exception], None]) -> Iterator[Any]:
+            if staged is not None:
+                # Staged lines are already canonical bodies.
+                return _staged_bodies(staged)
+            # Undecoded JSONL lines keep the reread cheap: only modified lines
+            # are parsed.
+            return _records(source, on_error, "jsonl", decode=_passthrough)
+
+        parse = None if staged is not None else _INPUT_DECODER.decode
         self._read_source(
-            lambda on_error: _records(source, on_error, input_format, decode=_passthrough),
+            read,
             lambda items: self._insert_field_bodies(items, side, name, parse),
             name,
             "could not write the temporary index",
@@ -1696,6 +1818,7 @@ class DiffResult:
         name: str,
         parse: Optional[Callable[[str], Any]],
     ) -> None:
+        """Store the bodies of modified lines; `parse=None` means items are canonical bodies."""
         wanted = self._connection.execute(_SIDE_LINES_QUERIES[side])
         cursor = self._connection.cursor()
         pending = []
@@ -1705,8 +1828,10 @@ class DiffResult:
             if line != target[0]:
                 continue
             try:
-                record = item if parse is None else parse(item)
-                canonical = _canonical(_remove_ignored(record, self._ignore_tree))
+                if parse is None:
+                    canonical = item
+                else:
+                    canonical = _canonical(_remove_ignored(parse(item), self._ignore_tree))
             except (TypeError, ValueError):
                 canonical = None
             if canonical is None or _fingerprint(canonical) != (target[2], target[3]):

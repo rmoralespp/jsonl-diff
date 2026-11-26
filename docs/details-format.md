@@ -107,9 +107,10 @@ jsonl-diff old.jsonl new.jsonl --key id --details changes.jsonl --field-diff
 - Comparison is representation-sensitive: `1` → `1.0` is a `replace`.
 - Fields excluded with `--ignore` never appear.
 
-Patches require rereading the modified lines after indexing (see
-[architecture](architecture.md#field-diff-reread)); if an input changed
-meanwhile, the run fails with exit code `2`.
+Patches require rereading the modified lines of JSONL inputs after indexing
+(see [architecture](architecture.md#field-diff-reread)); if an input changed
+meanwhile, the run fails with exit code `2`. `--format json` inputs are read
+only once: their canonical records are staged while indexing.
 
 ## Querying a report
 

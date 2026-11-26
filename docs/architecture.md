@@ -37,7 +37,9 @@ occurrences rather than the combined input size for path and URL sources.
 File-like objects and stdin are first copied into the workspace so both workers
 and the field-diff reread can reopen them, so those sources temporarily require their full encoded size
 in addition to the indexes. Duplicate diagnostics compare stored fingerprints
-and do not require retaining or rereading full records.
+and do not require retaining or rereading full records. Field diff on
+`--format json` input additionally stages normalized records during indexing
+(see [Field-diff reread](#field-diff-reread)).
 
 ## Observed-schema profile
 
@@ -59,13 +61,22 @@ profiled as terminal `array` values; their elements are not inferred.
 
 ## Field-diff reread
 
-The index stores fingerprints rather than records, so field diff adds a
-sequential reread of both sides after the summary. Only modified lines are
-decoded; their canonical body (after `--ignore`) must match the indexed length
-and digest, otherwise entering the context fails with `InputError`
-(`source changed during comparison`). Every line is still read, compressed
-sources are decompressed again, `--format json` is fully reparsed, and URLs are
+The index stores fingerprints rather than records, so field diff needs the
+modified bodies again after the summary. JSONL sources are reread
+sequentially; only modified lines are decoded. Their canonical body (after
+`--ignore`) must match the indexed length and digest, otherwise entering the
+context fails with `InputError` (`source changed during comparison`). Every
+line is still read, compressed sources are decompressed again, and URLs are
 downloaded again; staged stdin and file-like inputs use the workspace copy.
+
+With `--format json`, reparsing whole arrays would dominate the run, so each
+indexing worker also writes the canonical body of every array item, one per
+line, into the workspace (items rejected by `--where` stay as empty lines so
+line numbers match the index). The reread then scans those lines without
+decoding them, verifies the modified ones against the index, and removes the
+staged files before the context is entered. Sources are read only once, so a
+JSON source that changes after indexing is not detected; temporary disk use
+peaks at roughly the normalized size of both inputs on top of the index.
 
 Verified bodies are stored in a temporary table indexed by side and identity
 (about twice the canonical size of the modified records), flushed in batches of
