@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v0.3.3
+
 * **Changed:** With `format="json"` / `--format json` and field diff, workers stage each record's
   canonical body while indexing, so patches no longer reparse both arrays or read the sources twice
   (second pass ~4x faster on 1M records). Temporary disk use grows by about the normalized size
